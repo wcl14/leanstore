@@ -1,0 +1,2308 @@
+diff --git a/backend/leanstore/KVInterface.hpp b/backend/leanstore/KVInterface.hpp
+index ede7f14..b79a5b1 100644
+--- a/backend/leanstore/KVInterface.hpp
++++ b/backend/leanstore/KVInterface.hpp
+@@ -12,8 +12,8 @@ enum class OP_RESULT : u8 { OK = 0, NOT_FOUND = 1, DUPLICATE = 2, ABORT_TX = 3,
+ struct UpdateSameSizeInPlaceDescriptor {
+    u8 count = 0;
+    struct Slot {
+-      u16 offset;
+-      u16 length;
++      u32 offset;
++      u32 length;
+       bool operator==(const Slot& other) const { return offset == other.offset && length == other.length; }
+    };
+    Slot slots[];
+@@ -43,30 +43,30 @@ struct UpdateSameSizeInPlaceDescriptor {
+ class KVInterface
+ {
+   public:
+-   virtual OP_RESULT lookup(u8* key, u16 key_length, std::function<void(const u8*, u16)> payload_callback) = 0;
+-   virtual OP_RESULT insert(u8* key, u16 key_length, u8* value, u16 value_length) = 0;
++   virtual OP_RESULT lookup(u8* key, u32 key_length, std::function<void(const u8*, u32)> payload_callback) = 0;
++   virtual OP_RESULT insert(u8* key, u32 key_length, u8* value, u32 value_length) = 0;
+    virtual OP_RESULT updateSameSizeInPlace(u8* key,
+-                                           u16 key_length,
+-                                           std::function<void(u8* value, u16 value_size)>,
++                                           u32 key_length,
++                                           std::function<void(u8* value, u32 value_size)>,
+                                            UpdateSameSizeInPlaceDescriptor&) = 0;
+-   virtual OP_RESULT remove(u8* key, u16 key_length) = 0;
++   virtual OP_RESULT remove(u8* key, u32 key_length) = 0;
+    virtual OP_RESULT scanAsc(u8* start_key,
+-                             u16 key_length,
+-                             std::function<bool(const u8* key, u16 key_length, const u8* value, u16 value_length)>,
++                             u32 key_length,
++                             std::function<bool(const u8* key, u32 key_length, const u8* value, u32 value_length)>,
+                              std::function<void()>) = 0;
+    virtual OP_RESULT scanDesc(u8* start_key,
+-                              u16 key_length,
+-                              std::function<bool(const u8* key, u16 key_length, const u8* value, u16 value_length)>,
++                              u32 key_length,
++                              std::function<bool(const u8* key, u32 key_length, const u8* value, u32 value_length)>,
+                               std::function<void()>) = 0;
+    // -------------------------------------------------------------------------------------
+    virtual u64 countPages() = 0;
+    virtual u64 countEntries() = 0;
+    virtual u64 getHeight() = 0;
+    // -------------------------------------------------------------------------------------
+-   virtual OP_RESULT prefixLookup(u8*, u16, std::function<void(const u8*, u16, const u8*, u16)>) { return OP_RESULT::OTHER; }
+-   virtual OP_RESULT prefixLookupForPrev(u8*, u16, std::function<void(const u8*, u16, const u8*, u16)>) { return OP_RESULT::OTHER; }
+-   virtual OP_RESULT append(std::function<void(u8*)>, u16, std::function<void(u8*)>, u16, std::unique_ptr<u8[]>&) { return OP_RESULT::OTHER; }
+-   virtual OP_RESULT rangeRemove(u8*, u16, u8*, u16, [[maybe_unused]] bool page_wise = true) { return OP_RESULT::OTHER; }
++   virtual OP_RESULT prefixLookup(u8*, u32, std::function<void(const u8*, u32, const u8*, u32)>) { return OP_RESULT::OTHER; }
++   virtual OP_RESULT prefixLookupForPrev(u8*, u32, std::function<void(const u8*, u32, const u8*, u32)>) { return OP_RESULT::OTHER; }
++   virtual OP_RESULT append(std::function<void(u8*)>, u32, std::function<void(u8*)>, u32, std::unique_ptr<u8[]>&) { return OP_RESULT::OTHER; }
++   virtual OP_RESULT rangeRemove(u8*, u32, u8*, u32, [[maybe_unused]] bool page_wise = true) { return OP_RESULT::OTHER; }
+ };
+ // -------------------------------------------------------------------------------------
+ using Slice = std::basic_string_view<u8>;
+diff --git a/backend/leanstore/concurrency-recovery/HistoryTree.cpp b/backend/leanstore/concurrency-recovery/HistoryTree.cpp
+index 671dbd5..04893e3 100644
+--- a/backend/leanstore/concurrency-recovery/HistoryTree.cpp
++++ b/backend/leanstore/concurrency-recovery/HistoryTree.cpp
+@@ -150,12 +150,12 @@ void HistoryTree::purgeVersions(WORKERID worker_id,
+                                 RemoveVersionCallback cb,
+                                 [[maybe_unused]] const u64 limit)  // [from, to]
+ {
+-   u16 key_length = sizeof(to_tx_id);
++   u32 key_length = sizeof(to_tx_id);
+    u8 key_buffer[PAGE_SIZE];
+    utils::fold(key_buffer, from_tx_id);
+    Slice key(key_buffer, key_length);
+    u8 payload[PAGE_SIZE];
+-   u16 payload_length;
++   u32 payload_length;
+    volatile u64 removed_versions = 0;
+    BTreeLL* volatile btree = remove_btrees[worker_id];
+    // -------------------------------------------------------------------------------------
+@@ -305,13 +305,13 @@ void HistoryTree::visitRemoveVersions(WORKERID worker_id,
+ {
+    // [from, to]
+    BTreeLL* btree = remove_btrees[worker_id];
+-   u16 key_length = sizeof(to_tx_id);
++   u32 key_length = sizeof(to_tx_id);
+    u8 key_buffer[PAGE_SIZE];
+    u64 offset = 0;
+    offset += utils::fold(key_buffer + offset, from_tx_id);
+    Slice key(key_buffer, key_length);
+    u8 payload[PAGE_SIZE];
+-   u16 payload_length;
++   u32 payload_length;
+    // -------------------------------------------------------------------------------------
+    jumpmuTry()
+    {
+diff --git a/backend/leanstore/concurrency-recovery/WALEntry.hpp b/backend/leanstore/concurrency-recovery/WALEntry.hpp
+index cb53f03..173a97f 100644
+--- a/backend/leanstore/concurrency-recovery/WALEntry.hpp
++++ b/backend/leanstore/concurrency-recovery/WALEntry.hpp
+@@ -16,7 +16,7 @@ struct WALEntry {
+    // -------------------------------------------------------------------------------------
+    u64 magic_debugging_number = 99;
+    std::atomic<LID> lsn;
+-   u16 size;
++   u32 size;
+    TYPE type;
+    void computeCRC() { magic_debugging_number = utils::CRC(reinterpret_cast<u8*>(this) + sizeof(u64), size - sizeof(u64)); }
+    void checkCRC() const
+diff --git a/backend/leanstore/storage/btree/BTreeLL.cpp b/backend/leanstore/storage/btree/BTreeLL.cpp
+index b392b94..17df361 100644
+--- a/backend/leanstore/storage/btree/BTreeLL.cpp
++++ b/backend/leanstore/storage/btree/BTreeLL.cpp
+@@ -17,7 +17,7 @@ namespace storage
+ namespace btree
+ {
+ // -------------------------------------------------------------------------------------
+-OP_RESULT BTreeLL::lookup(u8* key, u16 key_length, function<void(const u8*, u16)> payload_callback)
++OP_RESULT BTreeLL::lookup(u8* key, u32 key_length, function<void(const u8*, u32)> payload_callback)
+ {
+    while (true) {
+       jumpmuTry()
+@@ -27,7 +27,7 @@ OP_RESULT BTreeLL::lookup(u8* key, u16 key_length, function<void(const u8*, u16)
+          // -------------------------------------------------------------------------------------
+          DEBUG_BLOCK()
+          {
+-            s16 sanity_check_result = leaf->compareKeyWithBoundaries(key, key_length);
++            s32 sanity_check_result = leaf->compareKeyWithBoundaries(key, key_length);
+             leaf.recheck();
+             if (sanity_check_result != 0) {
+                cout << leaf->count << endl;
+@@ -35,7 +35,7 @@ OP_RESULT BTreeLL::lookup(u8* key, u16 key_length, function<void(const u8*, u16)
+             ensure(sanity_check_result == 0);
+          }
+          // -------------------------------------------------------------------------------------
+-         s16 pos = leaf->lowerBound<true>(key, key_length);
++         s32 pos = leaf->lowerBound<true>(key, key_length);
+          if (pos != -1) {
+             payload_callback(leaf->getPayload(pos), leaf->getPayloadLength(pos));
+             leaf.recheck();
+@@ -87,8 +87,8 @@ bool BTreeLL::isRangeSurelyEmpty(Slice start_key, Slice end_key)
+ }
+ // -------------------------------------------------------------------------------------
+ OP_RESULT BTreeLL::scanAsc(u8* start_key,
+-                           u16 key_length,
+-                           std::function<bool(const u8* key, u16 key_length, const u8* payload, u16 payload_length)> callback,
++                           u32 key_length,
++                           std::function<bool(const u8* key, u32 key_length, const u8* payload, u32 payload_length)> callback,
+                            function<void()>)
+ {
+    COUNTERS_BLOCK()
+@@ -116,7 +116,7 @@ OP_RESULT BTreeLL::scanAsc(u8* start_key,
+    return OP_RESULT::OTHER;
+ }
+ // -------------------------------------------------------------------------------------
+-OP_RESULT BTreeLL::scanDesc(u8* start_key, u16 key_length, std::function<bool(const u8*, u16, const u8*, u16)> callback, function<void()>)
++OP_RESULT BTreeLL::scanDesc(u8* start_key, u32 key_length, std::function<bool(const u8*, u32, const u8*, u32)> callback, function<void()>)
+ {
+    COUNTERS_BLOCK()
+    {
+@@ -148,7 +148,7 @@ OP_RESULT BTreeLL::scanDesc(u8* start_key, u16 key_length, std::function<bool(co
+    return OP_RESULT::OTHER;
+ }
+ // -------------------------------------------------------------------------------------
+-OP_RESULT BTreeLL::insert(u8* o_key, u16 o_key_length, u8* o_value, u16 o_value_length)
++OP_RESULT BTreeLL::insert(u8* o_key, u32 o_key_length, u8* o_value, u32 o_value_length)
+ {
+    cr::activeTX().markAsWrite();
+    if (config.enable_wal) {
+@@ -179,7 +179,7 @@ OP_RESULT BTreeLL::insert(u8* o_key, u16 o_key_length, u8* o_value, u16 o_value_
+    return OP_RESULT::OTHER;
+ }
+ // -------------------------------------------------------------------------------------
+-OP_RESULT BTreeLL::prefixLookup(u8* key, u16 key_length, std::function<void(const u8*, u16, const u8*, u16)> payload_callback)
++OP_RESULT BTreeLL::prefixLookup(u8* key, u32 key_length, std::function<void(const u8*, u32, const u8*, u32)> payload_callback)
+ {
+    while (true) {
+       jumpmuTry()
+@@ -188,21 +188,21 @@ OP_RESULT BTreeLL::prefixLookup(u8* key, u16 key_length, std::function<void(cons
+          findLeafCanJump(leaf, key, key_length);
+          // -------------------------------------------------------------------------------------
+          bool is_equal = false;
+-         s16 cur = leaf->lowerBound<false>(key, key_length, &is_equal);
++         s32 cur = leaf->lowerBound<false>(key, key_length, &is_equal);
+          if (is_equal == true) {
+             payload_callback(key, key_length, leaf->getPayload(cur), leaf->getPayloadLength(cur));
+             leaf.recheck();
+             jumpmu_return OP_RESULT::OK;
+          } else if (cur < leaf->count) {
+-            const u16 s_prefix_length = leaf->prefix_length;
+-            const u16 s_key_length = leaf->getKeyLen(cur);
+-            const u16 compiled_key_length = s_prefix_length + s_key_length;
++            const u32 s_prefix_length = leaf->prefix_length;
++            const u32 s_key_length = leaf->getKeyLen(cur);
++            const u32 compiled_key_length = s_prefix_length + s_key_length;
+             leaf.recheck();
+             u8 compiled_key[compiled_key_length];
+             std::memcpy(compiled_key, leaf->getPrefix(), s_prefix_length);
+             std::memcpy(compiled_key + s_prefix_length, leaf->getKey(cur), s_key_length);
+             const u8* s_payload = leaf->getPayload(cur);
+-            const u16 s_payload_length = leaf->getPayloadLength(cur);
++            const u32 s_payload_length = leaf->getPayloadLength(cur);
+             leaf.recheck();
+             payload_callback(compiled_key, compiled_key_length, s_payload, s_payload_length);
+             leaf.recheck();
+@@ -210,7 +210,7 @@ OP_RESULT BTreeLL::prefixLookup(u8* key, u16 key_length, std::function<void(cons
+          } else {
+             OP_RESULT ret = scanAsc(
+                 key, key_length,
+-                [&](const u8* s_key, u16 s_key_length, const u8* s_value, u16 s_value_length) {
++                [&](const u8* s_key, u32 s_key_length, const u8* s_value, u32 s_value_length) {
+                    payload_callback(s_key, s_key_length, s_value, s_value_length);
+                    return false;
+                 },
+@@ -227,7 +227,7 @@ OP_RESULT BTreeLL::prefixLookup(u8* key, u16 key_length, std::function<void(cons
+    return OP_RESULT::OTHER;
+ }
+ // -------------------------------------------------------------------------------------
+-OP_RESULT BTreeLL::prefixLookupForPrev(u8* key, u16 key_length, std::function<void(const u8*, u16, const u8*, u16)> payload_callback)
++OP_RESULT BTreeLL::prefixLookupForPrev(u8* key, u32 key_length, std::function<void(const u8*, u32, const u8*, u32)> payload_callback)
+ {
+    while (true) {
+       jumpmuTry()
+@@ -236,22 +236,22 @@ OP_RESULT BTreeLL::prefixLookupForPrev(u8* key, u16 key_length, std::function<vo
+          findLeafCanJump(leaf, key, key_length);
+          // -------------------------------------------------------------------------------------
+          bool is_equal = false;
+-         s16 cur = leaf->lowerBound<false>(key, key_length, &is_equal);
++         s32 cur = leaf->lowerBound<false>(key, key_length, &is_equal);
+          if (is_equal == true) {
+             payload_callback(key, key_length, leaf->getPayload(cur), leaf->getPayloadLength(cur));
+             leaf.recheck();
+             jumpmu_return OP_RESULT::OK;
+          } else if (cur > 0) {
+             cur -= 1;
+-            const u16 s_prefix_length = leaf->prefix_length;
+-            const u16 s_key_length = leaf->getKeyLen(cur);
+-            const u16 compiled_key_length = s_prefix_length + s_key_length;
++            const u32 s_prefix_length = leaf->prefix_length;
++            const u32 s_key_length = leaf->getKeyLen(cur);
++            const u32 compiled_key_length = s_prefix_length + s_key_length;
+             leaf.recheck();
+             u8 compiled_key[compiled_key_length];
+             std::memcpy(compiled_key, leaf->getPrefix(), s_prefix_length);
+             std::memcpy(compiled_key + s_prefix_length, leaf->getKey(cur), s_key_length);
+             const u8* s_payload = leaf->getPayload(cur);
+-            const u16 s_payload_length = leaf->getPayloadLength(cur);
++            const u32 s_payload_length = leaf->getPayloadLength(cur);
+             leaf.recheck();
+             payload_callback(compiled_key, compiled_key_length, s_payload, s_payload_length);
+             leaf.recheck();
+@@ -259,7 +259,7 @@ OP_RESULT BTreeLL::prefixLookupForPrev(u8* key, u16 key_length, std::function<vo
+          } else {
+             OP_RESULT ret = scanDesc(
+                 key, key_length,
+-                [&](const u8* s_key, u16 s_key_length, const u8* s_value, u16 s_value_length) {
++                [&](const u8* s_key, u32 s_key_length, const u8* s_value, u32 s_value_length) {
+                    payload_callback(s_key, s_key_length, s_value, s_value_length);
+                    return false;
+                 },
+@@ -277,9 +277,9 @@ OP_RESULT BTreeLL::prefixLookupForPrev(u8* key, u16 key_length, std::function<vo
+ }
+ // -------------------------------------------------------------------------------------
+ OP_RESULT BTreeLL::append(std::function<void(u8*)> o_key,
+-                          u16 o_key_length,
++                          u32 o_key_length,
+                           std::function<void(u8*)> o_value,
+-                          u16 o_value_length,
++                          u32 o_value_length,
+                           std::unique_ptr<u8[]>& session_ptr)
+ {
+    struct alignas(64) Session {
+@@ -360,8 +360,8 @@ OP_RESULT BTreeLL::append(std::function<void(u8*)> o_key,
+ }
+ // -------------------------------------------------------------------------------------
+ OP_RESULT BTreeLL::updateSameSizeInPlace(u8* o_key,
+-                                         u16 o_key_length,
+-                                         function<void(u8* payload, u16 payload_size)> callback,
++                                         u32 o_key_length,
++                                         function<void(u8* payload, u32 payload_size)> callback,
+                                          UpdateSameSizeInPlaceDescriptor& update_descriptor)
+ {
+    cr::activeTX().markAsWrite();
+@@ -380,7 +380,7 @@ OP_RESULT BTreeLL::updateSameSizeInPlace(u8* o_key,
+       if (config.enable_wal) {
+          assert(update_descriptor.count > 0);  // if it is a secondary index, then we can not use updateSameSize
+          // -------------------------------------------------------------------------------------
+-         const u16 delta_length = update_descriptor.size() + update_descriptor.diffLength();
++         const u32 delta_length = update_descriptor.size() + update_descriptor.diffLength();
+          auto wal_entry = iterator.leaf.reserveWALEntry<WALUpdate>(key.length() + delta_length);
+          wal_entry->type = WAL_LOG_TYPE::WALUpdate;
+          wal_entry->key_length = key.length();
+@@ -407,7 +407,7 @@ OP_RESULT BTreeLL::updateSameSizeInPlace(u8* o_key,
+    return OP_RESULT::OTHER;
+ }
+ // -------------------------------------------------------------------------------------
+-OP_RESULT BTreeLL::remove(u8* o_key, u16 o_key_length)
++OP_RESULT BTreeLL::remove(u8* o_key, u32 o_key_length)
+ {
+    cr::activeTX().markAsWrite();
+    if (config.enable_wal) {
+@@ -444,7 +444,7 @@ OP_RESULT BTreeLL::remove(u8* o_key, u16 o_key_length)
+    return OP_RESULT::OTHER;
+ }
+ // -------------------------------------------------------------------------------------
+-OP_RESULT BTreeLL::rangeRemove(u8* start_key, u16 start_key_length, u8* end_key, u16 end_key_length, bool page_wise)
++OP_RESULT BTreeLL::rangeRemove(u8* start_key, u32 start_key_length, u8* end_key, u32 end_key_length, bool page_wise)
+ {
+    const Slice s_key(start_key, start_key_length);
+    const Slice e_key(end_key, end_key_length);
+diff --git a/backend/leanstore/storage/btree/BTreeLL.hpp b/backend/leanstore/storage/btree/BTreeLL.hpp
+index 888976d..234866a 100644
+--- a/backend/leanstore/storage/btree/BTreeLL.hpp
++++ b/backend/leanstore/storage/btree/BTreeLL.hpp
+@@ -22,51 +22,51 @@ class BTreeLL : public KVInterface, public BTreeGeneric
+ {
+   public:
+    struct WALBeforeAfterImage : WALEntry {
+-      u16 image_size;
++      u32 image_size;
+       u8 payload[];
+    };
+    struct WALAfterImage : WALEntry {
+-      u16 image_size;
++      u32 image_size;
+       u8 payload[];
+    };
+    struct WALInsert : WALEntry {
+-      u16 key_length;
+-      u16 value_length;
++      u32 key_length;
++      u32 value_length;
+       u8 payload[];
+    };
+    struct WALUpdate : WALEntry {
+-      u16 key_length;
+-      u16 delta_length;
++      u32 key_length;
++      u32 delta_length;
+       u8 payload[];
+    };
+    struct WALRemove : WALEntry {
+-      u16 key_length;
+-      u16 value_length;
++      u32 key_length;
++      u32 value_length;
+       u8 payload[];
+    };
+    // -------------------------------------------------------------------------------------
+    BTreeLL() = default;
+    // -------------------------------------------------------------------------------------
+-   virtual OP_RESULT lookup(u8* key, u16 key_length, function<void(const u8*, u16)> payload_callback) override;
+-   virtual OP_RESULT insert(u8* key, u16 key_length, u8* value, u16 value_length) override;
++   virtual OP_RESULT lookup(u8* key, u32 key_length, function<void(const u8*, u32)> payload_callback) override;
++   virtual OP_RESULT insert(u8* key, u32 key_length, u8* value, u32 value_length) override;
+    virtual OP_RESULT updateSameSizeInPlace(u8* key,
+-                                           u16 key_length,
+-                                           function<void(u8* value, u16 value_size)>,
++                                           u32 key_length,
++                                           function<void(u8* value, u32 value_size)>,
+                                            UpdateSameSizeInPlaceDescriptor&) override;
+-   virtual OP_RESULT remove(u8* key, u16 key_length) override;
++   virtual OP_RESULT remove(u8* key, u32 key_length) override;
+    virtual OP_RESULT scanAsc(u8* start_key,
+-                             u16 key_length,
+-                             function<bool(const u8* key, u16 key_length, const u8* value, u16 value_length)>,
++                             u32 key_length,
++                             function<bool(const u8* key, u32 key_length, const u8* value, u32 value_length)>,
+                              function<void()>) override;
+    virtual OP_RESULT scanDesc(u8* start_key,
+-                              u16 key_length,
+-                              function<bool(const u8* key, u16 key_length, const u8* value, u16 value_length)>,
++                              u32 key_length,
++                              function<bool(const u8* key, u32 key_length, const u8* value, u32 value_length)>,
+                               function<void()>) override;
+    // -------------------------------------------------------------------------------------
+-   virtual OP_RESULT prefixLookup(u8* key, u16 key_length, std::function<void(const u8*, u16, const u8*, u16)> payload_callback) override;
+-   virtual OP_RESULT prefixLookupForPrev(u8* key, u16 key_length, std::function<void(const u8*, u16, const u8*, u16)> payload_callback) override;
+-   virtual OP_RESULT append(std::function<void(u8*)>, u16, std::function<void(u8*)>, u16, std::unique_ptr<u8[]>&) override;
+-   virtual OP_RESULT rangeRemove(u8* start_key, u16 start_key_length, u8* end_key, u16 end_key_length, bool page_used) override;
++   virtual OP_RESULT prefixLookup(u8* key, u32 key_length, std::function<void(const u8*, u32, const u8*, u32)> payload_callback) override;
++   virtual OP_RESULT prefixLookupForPrev(u8* key, u32 key_length, std::function<void(const u8*, u32, const u8*, u32)> payload_callback) override;
++   virtual OP_RESULT append(std::function<void(u8*)>, u32, std::function<void(u8*)>, u32, std::unique_ptr<u8[]>&) override;
++   virtual OP_RESULT rangeRemove(u8* start_key, u32 start_key_length, u8* end_key, u32 end_key_length, bool page_used) override;
+    // -------------------------------------------------------------------------------------
+    bool isRangeSurelyEmpty(Slice start_key, Slice end_key);
+    // -------------------------------------------------------------------------------------
+diff --git a/backend/leanstore/storage/btree/BTreeVI.cpp b/backend/leanstore/storage/btree/BTreeVI.cpp
+index 389132b..9978f0e 100644
+--- a/backend/leanstore/storage/btree/BTreeVI.cpp
++++ b/backend/leanstore/storage/btree/BTreeVI.cpp
+@@ -22,7 +22,7 @@ namespace storage
+ namespace btree
+ {
+ // -------------------------------------------------------------------------------------
+-OP_RESULT BTreeVI::lookup(u8* o_key, u16 o_key_length, function<void(const u8*, u16)> payload_callback)
++OP_RESULT BTreeVI::lookup(u8* o_key, u32 o_key_length, function<void(const u8*, u32)> payload_callback)
+ {
+    const OP_RESULT ret = lookupOptimistic(o_key, o_key_length, payload_callback);
+    if (ret == OP_RESULT::OTHER) {
+@@ -32,7 +32,7 @@ OP_RESULT BTreeVI::lookup(u8* o_key, u16 o_key_length, function<void(const u8*,
+    }
+ }
+ // -------------------------------------------------------------------------------------
+-OP_RESULT BTreeVI::lookupPessimistic(u8* key_buffer, const u16 key_length, function<void(const u8*, u16)> payload_callback)
++OP_RESULT BTreeVI::lookupPessimistic(u8* key_buffer, const u32 key_length, function<void(const u8*, u32)> payload_callback)
+ {
+    MutableSlice m_key(key_buffer, key_length);
+    Slice key(key_buffer, key_length);
+@@ -78,7 +78,7 @@ OP_RESULT BTreeVI::lookupPessimistic(u8* key_buffer, const u16 key_length, funct
+    return OP_RESULT::OTHER;
+ }
+ // -------------------------------------------------------------------------------------
+-OP_RESULT BTreeVI::lookupOptimistic(const u8* key, const u16 key_length, function<void(const u8*, u16)> payload_callback)
++OP_RESULT BTreeVI::lookupOptimistic(const u8* key, const u32 key_length, function<void(const u8*, u32)> payload_callback)
+ {
+    while (true) {
+       jumpmuTry()
+@@ -86,7 +86,7 @@ OP_RESULT BTreeVI::lookupOptimistic(const u8* key, const u16 key_length, functio
+          HybridPageGuard<BTreeNode> leaf;
+          findLeafCanJump(leaf, key, key_length);
+          // -------------------------------------------------------------------------------------
+-         s16 pos = leaf->lowerBound<true>(key, key_length);
++         s32 pos = leaf->lowerBound<true>(key, key_length);
+          if (pos != -1) {
+             auto tuple_head = *reinterpret_cast<Tuple*>(leaf->getPayload(pos));
+             leaf.recheck();
+@@ -126,7 +126,7 @@ OP_RESULT BTreeVI::lookupOptimistic(const u8* key, const u16 key_length, functio
+                HybridPageGuard<BTreeNode> target_guard;
+                target_guard = HybridPageGuard<BTreeNode>(p_guard, p_guard->upper);
+                // -------------------------------------------------------------------------------------
+-               u16 volatile level = 0;
++               u32 volatile level = 0;
+                // -------------------------------------------------------------------------------------
+                while (!target_guard->is_leaf) {
+                   s32 pos = target_guard->lowerBound<false>(key, key_length);
+@@ -152,7 +152,7 @@ OP_RESULT BTreeVI::lookupOptimistic(const u8* key, const u16 key_length, functio
+    return OP_RESULT::OTHER;
+ }
+ // -------------------------------------------------------------------------------------
+-OP_RESULT BTreeVI::prepareDeterministicUpdate(u8* o_key, u16 o_key_length, BTreeExclusiveIterator& iterator)
++OP_RESULT BTreeVI::prepareDeterministicUpdate(u8* o_key, u32 o_key_length, BTreeExclusiveIterator& iterator)
+ {
+    jumpmuTry()
+    {
+@@ -170,9 +170,9 @@ OP_RESULT BTreeVI::prepareDeterministicUpdate(u8* o_key, u16 o_key_length, BTree
+ }
+ // -------------------------------------------------------------------------------------
+ OP_RESULT BTreeVI::executeDeterministricUpdate(u8* o_key,
+-                                               u16 o_key_length,
++                                               u32 o_key_length,
+                                                BTreeExclusiveIterator& iterator,
+-                                               function<void(u8*, u16)> callback,
++                                               function<void(u8*, u32)> callback,
+                                                UpdateSameSizeInPlaceDescriptor& update_descriptor)
+ {
+    jumpmuTry()
+@@ -183,8 +183,8 @@ OP_RESULT BTreeVI::executeDeterministricUpdate(u8* o_key,
+       MutableSlice primary_payload = iterator.mutableValue();
+       auto& tuple_head = *reinterpret_cast<ChainedTuple*>(primary_payload.data());
+       // Update in chained mode
+-      const u16 delta_and_descriptor_size = update_descriptor.size() + update_descriptor.diffLength();
+-      const u16 version_payload_length = delta_and_descriptor_size + sizeof(UpdateVersion);
++      const u32 delta_and_descriptor_size = update_descriptor.size() + update_descriptor.diffLength();
++      const u32 version_payload_length = delta_and_descriptor_size + sizeof(UpdateVersion);
+       COMMANDID command_id;
+       // -------------------------------------------------------------------------------------
+       // Write the ChainedTupleDelta
+@@ -230,8 +230,8 @@ OP_RESULT BTreeVI::executeDeterministricUpdate(u8* o_key,
+ }
+ // -------------------------------------------------------------------------------------
+ OP_RESULT BTreeVI::updateSameSizeInPlace(u8* o_key,
+-                                         u16 o_key_length,
+-                                         function<void(u8* value, u16 value_size)> callback,
++                                         u32 o_key_length,
++                                         function<void(u8* value, u32 value_size)> callback,
+                                          UpdateSameSizeInPlaceDescriptor& update_descriptor)
+ {
+    cr::activeTX().markAsWrite();
+@@ -246,7 +246,7 @@ OP_RESULT BTreeVI::updateSameSizeInPlace(u8* o_key,
+       ret = iterator.seekExact(key);
+       if (ret != OP_RESULT::OK) {
+          if (cr::activeTX().isOLAP() && ret == OP_RESULT::NOT_FOUND) {
+-            const bool removed_tuple_found = graveyard->lookup(o_key, o_key_length, [&](const u8*, u16) {}) == OP_RESULT::OK;
++            const bool removed_tuple_found = graveyard->lookup(o_key, o_key_length, [&](const u8*, u32) {}) == OP_RESULT::OK;
+             if (removed_tuple_found) {
+                jumpmu_return OP_RESULT::ABORT_TX;
+             }
+@@ -298,10 +298,10 @@ OP_RESULT BTreeVI::updateSameSizeInPlace(u8* o_key,
+                tuple_head.updates_counter = 0;
+                convert_to_fat_tuple = false;
+             } else {
+-               if (tuple_head.oldest_tx == static_cast<u16>(cr::Worker::global_oldest_all_start_ts & 0xFFFF)) {
++               if (tuple_head.oldest_tx == static_cast<u32>(cr::Worker::global_oldest_all_start_ts & 0xFFFF)) {
+                   tuple_head.updates_counter++;
+                } else {
+-                  tuple_head.oldest_tx = static_cast<u16>(cr::Worker::global_oldest_all_start_ts & 0xFFFF);
++                  tuple_head.oldest_tx = static_cast<u32>(cr::Worker::global_oldest_all_start_ts & 0xFFFF);
+                   tuple_head.updates_counter = 0;
+                }
+             }
+@@ -342,8 +342,8 @@ OP_RESULT BTreeVI::updateSameSizeInPlace(u8* o_key,
+       // Update in chained mode
+       MutableSlice primary_payload = iterator.mutableValue();
+       auto& tuple_head = *reinterpret_cast<ChainedTuple*>(primary_payload.data());
+-      const u16 delta_and_descriptor_size = update_descriptor.size() + update_descriptor.diffLength();
+-      const u16 version_payload_length = delta_and_descriptor_size + sizeof(UpdateVersion);
++      const u32 delta_and_descriptor_size = update_descriptor.size() + update_descriptor.diffLength();
++      const u32 version_payload_length = delta_and_descriptor_size + sizeof(UpdateVersion);
+       COMMANDID command_id;
+       // -------------------------------------------------------------------------------------
+       // Write the ChainedTupleDelta
+@@ -391,12 +391,12 @@ OP_RESULT BTreeVI::updateSameSizeInPlace(u8* o_key,
+    return OP_RESULT::OTHER;
+ }
+ // -------------------------------------------------------------------------------------
+-OP_RESULT BTreeVI::insert(u8* o_key, u16 o_key_length, u8* value, u16 value_length)
++OP_RESULT BTreeVI::insert(u8* o_key, u32 o_key_length, u8* value, u32 value_length)
+ {
+    cr::activeTX().markAsWrite();
+    cr::Worker::my().logging.walEnsureEnoughSpace(PAGE_SIZE * 1);
+    Slice key(o_key, o_key_length);
+-   const u16 payload_length = value_length + sizeof(ChainedTuple);
++   const u32 payload_length = value_length + sizeof(ChainedTuple);
+    // -------------------------------------------------------------------------------------
+    while (true) {
+       jumpmuTry()
+@@ -447,7 +447,7 @@ OP_RESULT BTreeVI::insert(u8* o_key, u16 o_key_length, u8* value, u16 value_leng
+    return OP_RESULT::OTHER;
+ }
+ // -------------------------------------------------------------------------------------
+-OP_RESULT BTreeVI::remove(u8* o_key, u16 o_key_length)
++OP_RESULT BTreeVI::remove(u8* o_key, u32 o_key_length)
+ {
+    // TODO: remove fat tuple
+    cr::activeTX().markAsWrite();
+@@ -460,7 +460,7 @@ OP_RESULT BTreeVI::remove(u8* o_key, u16 o_key_length)
+       OP_RESULT ret = iterator.seekExact(key);
+       if (ret != OP_RESULT::OK) {
+          if (cr::activeTX().isOLAP() && ret == OP_RESULT::NOT_FOUND) {
+-            const bool removed_tuple_found = graveyard->lookup(o_key, o_key_length, [&](const u8*, u16) {}) == OP_RESULT::OK;
++            const bool removed_tuple_found = graveyard->lookup(o_key, o_key_length, [&](const u8*, u32) {}) == OP_RESULT::OK;
+             if (removed_tuple_found) {
+                jumpmu_return OP_RESULT::ABORT_TX;
+             }
+@@ -495,8 +495,8 @@ OP_RESULT BTreeVI::remove(u8* o_key, u16 o_key_length)
+       dangling_pointer.bf = iterator.leaf.bf;
+       dangling_pointer.latch_version_should_be = iterator.leaf.guard.version;
+       dangling_pointer.head_slot = iterator.cur;
+-      const u16 value_length = iterator.value().length() - sizeof(ChainedTuple);
+-      const u16 version_payload_length = sizeof(RemoveVersion) + value_length + o_key_length;
++      const u32 value_length = iterator.value().length() - sizeof(ChainedTuple);
++      const u32 version_payload_length = sizeof(RemoveVersion) + value_length + o_key_length;
+       const COMMANDID command_id = cr::Worker::my().cc.insertVersion(dt_id, true, version_payload_length, [&](u8* secondary_payload) {
+          auto& secondary_version =
+              *new (secondary_payload) RemoveVersion(chain_head.worker_id, chain_head.tx_ts, chain_head.command_id, o_key_length, value_length);
+@@ -608,7 +608,7 @@ void BTreeVI::undo(void* btree_object, const u8* wal_entry_ptr, const u64)
+             OP_RESULT ret = iterator.seekExact(key);
+             ensure(ret == OP_RESULT::OK);
+             // Resize
+-            const u16 new_primary_payload_length = remove_entry.value_length + sizeof(ChainedTuple);
++            const u32 new_primary_payload_length = remove_entry.value_length + sizeof(ChainedTuple);
+             const Slice old_primary_payload = iterator.value();
+             if (old_primary_payload.length() < new_primary_payload_length) {
+                const bool did_extend = iterator.extendPayload(new_primary_payload_length);
+@@ -660,7 +660,7 @@ SpaceCheckResult BTreeVI::checkSpaceUtilization(void* btree_object, BufferFrame&
+    // -------------------------------------------------------------------------------------
+    c_guard.toExclusive();
+    c_guard.incrementGSN();
+-   for (u16 s_i = 0; s_i < c_guard->count; s_i++) {
++   for (u32 s_i = 0; s_i < c_guard->count; s_i++) {
+       auto& tuple = *reinterpret_cast<Tuple*>(c_guard->getPayload(s_i));
+       if (tuple.tuple_format == TupleFormat::FAT_TUPLE_DIFFERENT_ATTRIBUTES) {
+          auto& fat_tuple = *reinterpret_cast<FatTupleDifferentAttributes*>(c_guard->getPayload(s_i));
+@@ -849,7 +849,7 @@ struct DTRegistry::DTMeta BTreeVI::getMeta()
+    return btree_meta;
+ }
+ // -------------------------------------------------------------------------------------
+-OP_RESULT BTreeVI::scanDesc(u8* o_key, u16 o_key_length, function<bool(const u8*, u16, const u8*, u16)> callback, function<void()>)
++OP_RESULT BTreeVI::scanDesc(u8* o_key, u32 o_key_length, function<bool(const u8*, u32, const u8*, u32)> callback, function<void()>)
+ {
+    if (cr::activeTX().isOLAP()) {
+       TODOException();
+@@ -860,8 +860,8 @@ OP_RESULT BTreeVI::scanDesc(u8* o_key, u16 o_key_length, function<bool(const u8*
+ }
+ // -------------------------------------------------------------------------------------
+ OP_RESULT BTreeVI::scanAsc(u8* o_key,
+-                           u16 o_key_length,
+-                           function<bool(const u8* key, u16 key_length, const u8* value, u16 value_length)> callback,
++                           u32 o_key_length,
++                           function<bool(const u8* key, u32 key_length, const u8* value, u32 value_length)> callback,
+                            function<void()>)
+ {
+    if (cr::activeTX().isOLAP()) {
+@@ -872,10 +872,10 @@ OP_RESULT BTreeVI::scanAsc(u8* o_key,
+ }
+ // -------------------------------------------------------------------------------------
+ // TODO: Implement inserts after remove cases
+-std::tuple<OP_RESULT, u16> BTreeVI::reconstructChainedTuple([[maybe_unused]] Slice key, Slice payload, std::function<void(Slice value)> callback)
++std::tuple<OP_RESULT, u32> BTreeVI::reconstructChainedTuple([[maybe_unused]] Slice key, Slice payload, std::function<void(Slice value)> callback)
+ {
+-   u16 chain_length = 1;
+-   u16 materialized_value_length;
++   u32 chain_length = 1;
++   u32 materialized_value_length;
+    std::unique_ptr<u8[]> materialized_value;
+    const ChainedTuple& chain_head = *reinterpret_cast<const ChainedTuple*>(payload.data());
+    if (isVisibleForMe(chain_head.worker_id, chain_head.tx_ts, false)) {
+diff --git a/backend/leanstore/storage/btree/BTreeVI.hpp b/backend/leanstore/storage/btree/BTreeVI.hpp
+index 8b9dd19..ad2b513 100644
+--- a/backend/leanstore/storage/btree/BTreeVI.hpp
++++ b/backend/leanstore/storage/btree/BTreeVI.hpp
+@@ -24,14 +24,14 @@ class BTreeVI : public BTreeLL
+ {
+   public:
+    struct WALBeforeAfterImage : WALEntry {
+-      u16 image_size;
++      u32 image_size;
+       u8 payload[];
+    };
+    struct WALInitPage : WALEntry {
+       DTID dt_id;
+    };
+    struct WALAfterImage : WALEntry {
+-      u16 image_size;
++      u32 image_size;
+       u8 payload[];
+    };
+    struct WALLogicalSplit : WALEntry {
+@@ -41,12 +41,12 @@ class BTreeVI : public BTreeLL
+       s32 right_pos = -1;
+    };
+    struct WALInsert : WALEntry {
+-      u16 key_length;
+-      u16 value_length;
++      u32 key_length;
++      u32 value_length;
+       u8 payload[];
+    };
+    struct WALUpdateSSIP : WALEntry {
+-      u16 key_length;
++      u32 key_length;
+       u64 delta_length;
+       WORKERID before_worker_id;
+       TXID before_tx_id;
+@@ -54,8 +54,8 @@ class BTreeVI : public BTreeLL
+       u8 payload[];
+    };
+    struct WALRemove : WALEntry {
+-      u16 key_length;
+-      u16 value_length;
++      u32 key_length;
++      u32 value_length;
+       u8 before_worker_id;
+       u64 before_tx_id;
+       u64 before_command_id;
+@@ -107,8 +107,8 @@ class BTreeVI : public BTreeLL
+    // -------------------------------------------------------------------------------------
+    // Chained: only scheduled gc todos. FatTuple: eager pgc, no scheduled gc todos
+    struct __attribute__((packed)) ChainedTuple : Tuple {
+-      u16 updates_counter = 0;
+-      u16 oldest_tx = 0;
++      u32 updates_counter = 0;
++      u32 oldest_tx = 0;
+       u8 is_removed : 1;
+       // -------------------------------------------------------------------------------------
+       u8 payload[];  // latest version in-place
+@@ -133,11 +133,11 @@ class BTreeVI : public BTreeLL
+          inline u32 totalLength() { return sizeof(Delta) + getConstantDescriptor().size() + getConstantDescriptor().diffLength(); }
+       };
+       // -------------------------------------------------------------------------------------
+-      u16 value_length = 0;
++      u32 value_length = 0;
+       u32 total_space = 0;  // From the payload bytes array
+       u32 used_space = 0;   // does not include the struct itself
+       u32 data_offset = 0;
+-      u16 deltas_count = 0;  // Attention: coupled with used_space
++      u32 deltas_count = 0;  // Attention: coupled with used_space
+       u8 payload[];          // value, Delta+Descriptor+Diff[] O2N
+                              // -------------------------------------------------------------------------------------
+       FatTupleDifferentAttributes(const u32 init_total_space)
+@@ -147,8 +147,8 @@ class BTreeVI : public BTreeLL
+       // returns false to fallback to chained mode
+       static bool update(BTreeExclusiveIterator& iterator,
+                          u8* key,
+-                         u16 o_key_length,
+-                         function<void(u8* value, u16 value_size)>,
++                         u32 o_key_length,
++                         function<void(u8* value, u32 value_size)>,
+                          UpdateSameSizeInPlaceDescriptor&);
+       bool hasSpaceFor(const UpdateSameSizeInPlaceDescriptor&);
+       void append(UpdateSameSizeInPlaceDescriptor&);
+@@ -158,15 +158,15 @@ class BTreeVI : public BTreeLL
+       inline constexpr u8* getValue() { return payload; }
+       inline const u8* getValueConstant() const { return payload; }
+       // -------------------------------------------------------------------------------------
+-      inline u16* getDeltaOffsets() { return reinterpret_cast<u16*>(payload + value_length); }
+-      inline const u16* getDeltaOffsetsConstant() const { return reinterpret_cast<const u16*>(payload + value_length); }
+-      inline Delta& getDelta(u16 d_i)
++      inline u32* getDeltaOffsets() { return reinterpret_cast<u32*>(payload + value_length); }
++      inline const u32* getDeltaOffsetsConstant() const { return reinterpret_cast<const u32*>(payload + value_length); }
++      inline Delta& getDelta(u32 d_i)
+       {
+          assert(reinterpret_cast<u8*>(getDeltaOffsets() + d_i) < reinterpret_cast<u8*>(payload + getDeltaOffsets()[d_i]));
+          return *reinterpret_cast<Delta*>(payload + getDeltaOffsets()[d_i]);
+       }
+-      inline const Delta& getDeltaConstant(u16 d_i) const { return *reinterpret_cast<const Delta*>(payload + getDeltaOffsetsConstant()[d_i]); }
+-      std::tuple<OP_RESULT, u16> reconstructTuple(std::function<void(Slice value)> callback) const;
++      inline const Delta& getDeltaConstant(u32 d_i) const { return *reinterpret_cast<const Delta*>(payload + getDeltaOffsetsConstant()[d_i]); }
++      std::tuple<OP_RESULT, u32> reconstructTuple(std::function<void(Slice value)> callback) const;
+       // -------------------------------------------------------------------------------------
+       void convertToChained(DTID dt_id);
+       void resize(u32 new_length);
+@@ -200,36 +200,36 @@ class BTreeVI : public BTreeLL
+       bool isFinal() const { return command_id == 0; }
+    };
+    struct __attribute__((packed)) RemoveVersion : Version {
+-      u16 key_length;
+-      u16 value_length;
++      u32 key_length;
++      u32 value_length;
+       DanglingPointer dangling_pointer;
+       bool moved_to_graveway = false;
+       u8 payload[];  // Key + Value
+-      RemoveVersion(WORKERID worker_id, TXID tx_id, COMMANDID command_id, u16 key_length, u16 value_length)
++      RemoveVersion(WORKERID worker_id, TXID tx_id, COMMANDID command_id, u32 key_length, u32 value_length)
+           : Version(Version::TYPE::REMOVE, worker_id, tx_id, command_id), key_length(key_length), value_length(value_length)
+       {
+       }
+    };
+    // -------------------------------------------------------------------------------------
+    // KVInterface
+-   OP_RESULT lookup(u8* key, u16 key_length, function<void(const u8*, u16)> payload_callback) override;
+-   OP_RESULT insert(u8* key, u16 key_length, u8* value, u16 value_length) override;
+-   OP_RESULT updateSameSizeInPlace(u8* key, u16 key_length, function<void(u8* value, u16 value_size)>, UpdateSameSizeInPlaceDescriptor&) override;
+-   OP_RESULT remove(u8* key, u16 key_length) override;
++   OP_RESULT lookup(u8* key, u32 key_length, function<void(const u8*, u32)> payload_callback) override;
++   OP_RESULT insert(u8* key, u32 key_length, u8* value, u32 value_length) override;
++   OP_RESULT updateSameSizeInPlace(u8* key, u32 key_length, function<void(u8* value, u32 value_size)>, UpdateSameSizeInPlaceDescriptor&) override;
++   OP_RESULT remove(u8* key, u32 key_length) override;
+    OP_RESULT scanAsc(u8* start_key,
+-                     u16 key_length,
+-                     function<bool(const u8* key, u16 key_length, const u8* value, u16 value_length)>,
++                     u32 key_length,
++                     function<bool(const u8* key, u32 key_length, const u8* value, u32 value_length)>,
+                      function<void()>) override;
+    OP_RESULT scanDesc(u8* start_key,
+-                      u16 key_length,
+-                      function<bool(const u8* key, u16 key_length, const u8* value, u16 value_length)>,
++                      u32 key_length,
++                      function<bool(const u8* key, u32 key_length, const u8* value, u32 value_length)>,
+                       function<void()>) override;
+    // -------------------------------------------------------------------------------------
+-   OP_RESULT prepareDeterministicUpdate(u8* key, u16 key_length, BTreeExclusiveIterator& iterator);
++   OP_RESULT prepareDeterministicUpdate(u8* key, u32 key_length, BTreeExclusiveIterator& iterator);
+    OP_RESULT executeDeterministricUpdate(u8* key,
+-                                         u16 key_length,
++                                         u32 key_length,
+                                          BTreeExclusiveIterator& iterator,
+-                                         function<void(u8* value, u16 value_size)>,
++                                         function<void(u8* value, u32 value_size)>,
+                                          UpdateSameSizeInPlaceDescriptor&);
+ 
+    // -------------------------------------------------------------------------------------
+@@ -253,7 +253,7 @@ class BTreeVI : public BTreeLL
+    static DTRegistry::DTMeta getMeta();
+    // -------------------------------------------------------------------------------------
+    struct UnlockEntry {
+-      u16 key_length;  // SN always = 0
++      u32 key_length;  // SN always = 0
+       DanglingPointer dangling_pointer;
+       u8 key[];
+    };
+@@ -266,12 +266,12 @@ class BTreeVI : public BTreeLL
+    // -------------------------------------------------------------------------------------
+    bool convertChainedToFatTupleDifferentAttributes(BTreeExclusiveIterator& iterator);
+    // -------------------------------------------------------------------------------------
+-   OP_RESULT lookupPessimistic(u8* key, const u16 key_length, function<void(const u8*, u16)> payload_callback);
+-   OP_RESULT lookupOptimistic(const u8* key, const u16 key_length, function<void(const u8*, u16)> payload_callback);
++   OP_RESULT lookupPessimistic(u8* key, const u32 key_length, function<void(const u8*, u32)> payload_callback);
++   OP_RESULT lookupOptimistic(const u8* key, const u32 key_length, function<void(const u8*, u32)> payload_callback);
+ 
+    // -------------------------------------------------------------------------------------
+    template <bool asc = true>
+-   OP_RESULT scan(u8* o_key, u16 o_key_length, function<bool(const u8* key, u16 key_length, const u8* value, u16 value_length)> callback)
++   OP_RESULT scan(u8* o_key, u32 o_key_length, function<bool(const u8* key, u32 key_length, const u8* value, u32 value_length)> callback)
+    {
+       // TODO: index range lock for serializability
+       COUNTERS_BLOCK()
+@@ -305,7 +305,7 @@ class BTreeVI : public BTreeLL
+                keep_scanning = callback(s_key.data(), s_key.length(), value.data(), value.length());
+                counter++;
+             });
+-            const u16 chain_length = std::get<1>(reconstruct);
++            const u32 chain_length = std::get<1>(reconstruct);
+             COUNTERS_BLOCK()
+             {
+                WorkerCounters::myCounters().cc_read_chains[dt_id]++;
+@@ -334,7 +334,7 @@ class BTreeVI : public BTreeLL
+    // -------------------------------------------------------------------------------------
+    // TODO: atm, only ascending
+    template <bool asc = true>
+-   OP_RESULT scanOLAP(u8* o_key, u16 o_key_length, function<bool(const u8* key, u16 key_length, const u8* value, u16 value_length)> callback)
++   OP_RESULT scanOLAP(u8* o_key, u32 o_key_length, function<bool(const u8* key, u32 key_length, const u8* value, u32 value_length)> callback)
+    {
+       volatile bool keep_scanning = true;
+       // -------------------------------------------------------------------------------------
+@@ -445,7 +445,7 @@ class BTreeVI : public BTreeLL
+    static inline bool triggerPageWiseGarbageCollection(HybridPageGuard<BTreeNode>& guard) { return guard->has_garbage; }
+    u64 convertToFatTupleThreshold() { return FLAGS_worker_threads; }
+    // -------------------------------------------------------------------------------------
+-   inline std::tuple<OP_RESULT, u16> reconstructTuple(Slice key, Slice payload, std::function<void(Slice value)> callback)
++   inline std::tuple<OP_RESULT, u32> reconstructTuple(Slice key, Slice payload, std::function<void(Slice value)> callback)
+    {
+       while (true) {
+          jumpmuTry()
+@@ -477,7 +477,7 @@ class BTreeVI : public BTreeLL
+          jumpmuCatch() {}
+       }
+    }
+-   std::tuple<OP_RESULT, u16> reconstructChainedTuple(Slice key, Slice payload, std::function<void(Slice value)> callback);
++   std::tuple<OP_RESULT, u32> reconstructChainedTuple(Slice key, Slice payload, std::function<void(Slice value)> callback);
+    static inline u64 maxFatTupleLength() { return EFFECTIVE_PAGE_SIZE - 1000; }
+    // -------------------------------------------------------------------------------------
+    // HACKS
+diff --git a/backend/leanstore/storage/btree/FatTupleDifferentAttributes.cpp b/backend/leanstore/storage/btree/FatTupleDifferentAttributes.cpp
+index cf311ce..bfc2487 100644
+--- a/backend/leanstore/storage/btree/FatTupleDifferentAttributes.cpp
++++ b/backend/leanstore/storage/btree/FatTupleDifferentAttributes.cpp
+@@ -40,7 +40,7 @@ void BTreeVI::FatTupleDifferentAttributes::undoLastUpdate()
+    deltas_count -= 1;
+    const u32 delta_total_length = delta.totalLength();
+    data_offset += delta_total_length;
+-   used_space -= delta_total_length + sizeof(u16);
++   used_space -= delta_total_length + sizeof(u32);
+    BTreeLL::applyDiff(delta.getDescriptor(), getValue(), delta.payload + delta.getDescriptor().size());
+ }
+ // -------------------------------------------------------------------------------------
+@@ -53,10 +53,10 @@ void BTreeVI::FatTupleDifferentAttributes::garbageCollection()
+    }
+    utils::Timer timer(CRCounters::myCounters().cc_ms_gc);
+    // -------------------------------------------------------------------------------------
+-   auto append_ll = [](FatTupleDifferentAttributes& fat_tuple, u8* delta, u16 delta_length) {
+-      assert(fat_tuple.total_space >= (fat_tuple.used_space + delta_length + sizeof(u16)));
+-      const u16 d_i = fat_tuple.deltas_count++;
+-      fat_tuple.used_space += delta_length + sizeof(u16);
++   auto append_ll = [](FatTupleDifferentAttributes& fat_tuple, u8* delta, u32 delta_length) {
++      assert(fat_tuple.total_space >= (fat_tuple.used_space + delta_length + sizeof(u32)));
++      const u32 d_i = fat_tuple.deltas_count++;
++      fat_tuple.used_space += delta_length + sizeof(u32);
+       fat_tuple.data_offset -= delta_length;
+       fat_tuple.getDeltaOffsets()[d_i] = fat_tuple.data_offset;
+       std::memcpy(fat_tuple.payload + fat_tuple.data_offset, delta, delta_length);
+@@ -70,7 +70,7 @@ void BTreeVI::FatTupleDifferentAttributes::garbageCollection()
+       return;  // Done
+    }
+    // -------------------------------------------------------------------------------------
+-   u16 deltas_visible_by_all_counter = 0;
++   u32 deltas_visible_by_all_counter = 0;
+    for (s32 d_i = deltas_count - 1; d_i >= 1; d_i--) {
+       auto& delta = getDelta(d_i);
+       if (cr::Worker::my().cc.isVisibleForAll(delta.worker_id, delta.tx_ts)) {
+@@ -153,7 +153,7 @@ void BTreeVI::FatTupleDifferentAttributes::garbageCollection()
+             auto& delta_i = getDelta(d_i);
+             auto& descriptor_i = delta_i.getDescriptor();
+             u8* delta_diff_ptr = delta_i.payload + descriptor_i.size();
+-            for (s16 s_i = 0; s_i < descriptor_i.count; s_i++) {
++            for (s32 s_i = 0; s_i < descriptor_i.count; s_i++) {
+                slots_map[descriptor_i.slots[s_i]] = std::basic_string<u8>(delta_diff_ptr, descriptor_i.slots[s_i].length);
+                delta_diff_ptr += descriptor_i.slots[s_i].length;
+             }
+@@ -189,7 +189,7 @@ void BTreeVI::FatTupleDifferentAttributes::garbageCollection()
+    {
+       u32 should_used_space = value_length;
+       for (u32 d_i = 0; d_i < deltas_count; d_i++) {
+-         should_used_space += sizeof(u16) + getDelta(d_i).totalLength();
++         should_used_space += sizeof(u32) + getDelta(d_i).totalLength();
+       }
+       assert(used_space == should_used_space);
+    }
+@@ -197,14 +197,14 @@ void BTreeVI::FatTupleDifferentAttributes::garbageCollection()
+ // -------------------------------------------------------------------------------------
+ bool BTreeVI::FatTupleDifferentAttributes::hasSpaceFor(const UpdateSameSizeInPlaceDescriptor& update_descriptor)
+ {
+-   const u32 needed_space = update_descriptor.size() + update_descriptor.diffLength() + sizeof(u16) + sizeof(Delta);
+-   return (data_offset - (value_length + (deltas_count * sizeof(u16)))) >= needed_space;
++   const u32 needed_space = update_descriptor.size() + update_descriptor.diffLength() + sizeof(u32) + sizeof(Delta);
++   return (data_offset - (value_length + (deltas_count * sizeof(u32)))) >= needed_space;
+ }
+ // -------------------------------------------------------------------------------------
+ BTreeVI::FatTupleDifferentAttributes::Delta& BTreeVI::FatTupleDifferentAttributes::allocateDelta(u32 delta_total_length)
+ {
+-   assert((total_space - used_space) >= (delta_total_length + sizeof(u16)));
+-   used_space += delta_total_length + sizeof(u16);
++   assert((total_space - used_space) >= (delta_total_length + sizeof(u32)));
++   used_space += delta_total_length + sizeof(u32);
+    data_offset -= delta_total_length;
+    const u32 delta_i = deltas_count++;
+    getDeltaOffsets()[delta_i] = data_offset;
+@@ -226,8 +226,8 @@ void BTreeVI::FatTupleDifferentAttributes::append(UpdateSameSizeInPlaceDescripto
+ // Pre: tuple is write locked
+ bool BTreeVI::FatTupleDifferentAttributes::update(BTreeExclusiveIterator& iterator,
+                                                   u8* o_key,
+-                                                  u16 o_key_length,
+-                                                  function<void(u8* value, u16 value_size)> cb,
++                                                  u32 o_key_length,
++                                                  function<void(u8* value, u32 value_size)> cb,
+                                                   UpdateSameSizeInPlaceDescriptor& update_descriptor)
+ {
+ utils::Timer timer(CRCounters::myCounters().cc_ms_fat_tuple);
+@@ -241,7 +241,7 @@ cont : {
+    if (fat_tuple->hasSpaceFor(update_descriptor)) {
+       fat_tuple->append(update_descriptor);
+       // WAL
+-      const u16 delta_and_descriptor_size = update_descriptor.size() + update_descriptor.diffLength();
++      const u32 delta_and_descriptor_size = update_descriptor.size() + update_descriptor.diffLength();
+       auto wal_entry = iterator.leaf.reserveWALEntry<WALUpdateSSIP>(o_key_length + delta_and_descriptor_size);
+       wal_entry->type = WAL_LOG_TYPE::WALUpdate;
+       wal_entry->key_length = o_key_length;
+@@ -301,7 +301,7 @@ cont : {
+ }
+ }
+ // -------------------------------------------------------------------------------------
+-std::tuple<OP_RESULT, u16> BTreeVI::FatTupleDifferentAttributes::reconstructTuple(std::function<void(Slice value)> cb) const
++std::tuple<OP_RESULT, u32> BTreeVI::FatTupleDifferentAttributes::reconstructTuple(std::function<void(Slice value)> cb) const
+ {
+    if (cr::Worker::my().cc.isVisibleForMe(worker_id, tx_ts)) {
+       // Latest version is visible
+@@ -311,8 +311,8 @@ std::tuple<OP_RESULT, u16> BTreeVI::FatTupleDifferentAttributes::reconstructTupl
+       u8 materialized_value[value_length];
+       std::memcpy(materialized_value, getValueConstant(), value_length);
+       // we have to apply the diffs
+-      u16 chain_length = 2;
+-      for (s16 d_i = deltas_count - 1; d_i >= 0; d_i--) {
++      u32 chain_length = 2;
++      for (s32 d_i = deltas_count - 1; d_i >= 0; d_i--) {
+          auto& delta = getDeltaConstant(d_i);
+          BTreeLL::applyDiff(delta.getConstantDescriptor(), materialized_value,
+                             delta.payload + delta.getConstantDescriptor().size());  // Apply diff
+@@ -342,10 +342,10 @@ void BTreeVI::FatTupleDifferentAttributes::resize(const u32 new_length)
+    new_fat_tuple.used_space += value_length;
+    new_fat_tuple.value_length = value_length;
+    std::memcpy(new_fat_tuple.payload, payload, value_length);  // Copy value
+-   auto append_ll = [](FatTupleDifferentAttributes& fat_tuple, u8* delta, u16 delta_length) {
+-      assert(fat_tuple.total_space >= (fat_tuple.used_space + delta_length + sizeof(u16)));
+-      const u16 d_i = fat_tuple.deltas_count++;
+-      fat_tuple.used_space += delta_length + sizeof(u16);
++   auto append_ll = [](FatTupleDifferentAttributes& fat_tuple, u8* delta, u32 delta_length) {
++      assert(fat_tuple.total_space >= (fat_tuple.used_space + delta_length + sizeof(u32)));
++      const u32 d_i = fat_tuple.deltas_count++;
++      fat_tuple.used_space += delta_length + sizeof(u32);
+       fat_tuple.data_offset -= delta_length;
+       fat_tuple.getDeltaOffsets()[d_i] = fat_tuple.data_offset;
+       std::memcpy(fat_tuple.payload + fat_tuple.data_offset, delta, delta_length);
+@@ -360,7 +360,7 @@ void BTreeVI::FatTupleDifferentAttributes::resize(const u32 new_length)
+ bool BTreeVI::convertChainedToFatTupleDifferentAttributes(BTreeExclusiveIterator& iterator)
+ {
+    utils::Timer timer(CRCounters::myCounters().cc_ms_fat_tuple_conversion);
+-   u16 number_of_deltas_to_replace = 0;
++   u32 number_of_deltas_to_replace = 0;
+    std::vector<u8> dynamic_buffer;
+    dynamic_buffer.resize(maxFatTupleLength());
+    auto fat_tuple = new (dynamic_buffer.data()) FatTupleDifferentAttributes(dynamic_buffer.size() - sizeof(FatTupleDifferentAttributes));
+@@ -448,7 +448,7 @@ bool BTreeVI::convertChainedToFatTupleDifferentAttributes(BTreeExclusiveIterator
+       // cerr << fat_tuple->total_space << "," << fat_tuple->used_space << endl;
+       // fat_tuple->total_space = fat_tuple->used_space;
+       // fat_tuple->resize(fat_tuple->used_space);
+-      const u16 fat_tuple_length = sizeof(FatTupleDifferentAttributes) + fat_tuple->total_space;
++      const u32 fat_tuple_length = sizeof(FatTupleDifferentAttributes) + fat_tuple->total_space;
+       if (iterator.value().length() < fat_tuple_length) {
+          ensure(reinterpret_cast<const Tuple*>(iterator.value().data())->tuple_format == TupleFormat::CHAINED);
+          const bool did_extend = iterator.extendPayload(fat_tuple_length);
+diff --git a/backend/leanstore/storage/btree/core/BTreeGeneric.cpp b/backend/leanstore/storage/btree/core/BTreeGeneric.cpp
+index 0aaa37f..d4e2e1b 100644
+--- a/backend/leanstore/storage/btree/core/BTreeGeneric.cpp
++++ b/backend/leanstore/storage/btree/core/BTreeGeneric.cpp
+@@ -38,7 +38,7 @@ void BTreeGeneric::create(DTID dtid, Config config)
+    meta_page.incrementGSN();
+ }
+ // -------------------------------------------------------------------------------------
+-void BTreeGeneric::trySplit(BufferFrame& to_split, s16 favored_split_pos)
++void BTreeGeneric::trySplit(BufferFrame& to_split, s32 favored_split_pos)
+ {
+    cr::Worker::my().logging.walEnsureEnoughSpace(PAGE_SIZE * 1);
+    auto parent_handler = findParentEager(*this, to_split);
+@@ -51,13 +51,13 @@ void BTreeGeneric::trySplit(BufferFrame& to_split, s16 favored_split_pos)
+    if (favored_split_pos < 0 || favored_split_pos >= c_guard->count - 1) {
+       if (config.use_bulk_insert) {
+          favored_split_pos = c_guard->count - 2;
+-         sep_info = BTreeNode::SeparatorInfo{c_guard->getFullKeyLen(favored_split_pos), static_cast<u16>(favored_split_pos), false};
++         sep_info = BTreeNode::SeparatorInfo{c_guard->getFullKeyLen(favored_split_pos), static_cast<u32>(favored_split_pos), false};
+       } else {
+          sep_info = c_guard->findSep();
+       }
+    } else {
+       // Split on a specified position, used by contention management
+-      sep_info = BTreeNode::SeparatorInfo{c_guard->getFullKeyLen(favored_split_pos), static_cast<u16>(favored_split_pos), false};
++      sep_info = BTreeNode::SeparatorInfo{c_guard->getFullKeyLen(favored_split_pos), static_cast<u32>(favored_split_pos), false};
+    }
+    u8 sep_key[sep_info.length];
+    if (isMetaNode(p_guard)) {  // root split
+@@ -131,7 +131,7 @@ void BTreeGeneric::trySplit(BufferFrame& to_split, s16 favored_split_pos)
+       return;
+    } else {
+       // Parent is not root
+-      const u16 space_needed_for_separator = p_guard->spaceNeeded(sep_info.length, sizeof(SwipType));
++      const u32 space_needed_for_separator = p_guard->spaceNeeded(sep_info.length, sizeof(SwipType));
+       if (p_guard->hasEnoughSpaceFor(space_needed_for_separator)) {  // Is there enough space in the parent
+                                                                      // for the separator?
+          auto p_x_guard = ExclusivePageGuard(std::move(p_guard));
+@@ -339,8 +339,8 @@ bool BTreeGeneric::tryMerge(BufferFrame& to_merge, bool swizzle_sibling)
+ }
+ // -------------------------------------------------------------------------------------
+ // ret: 0 did nothing, 1 full, 2 partial
+-s16 BTreeGeneric::mergeLeftIntoRight(ExclusivePageGuard<BTreeNode>& parent,
+-                                     s16 left_pos,
++s32 BTreeGeneric::mergeLeftIntoRight(ExclusivePageGuard<BTreeNode>& parent,
++                                     s32 left_pos,
+                                      ExclusivePageGuard<BTreeNode>& from_left,
+                                      ExclusivePageGuard<BTreeNode>& to_right,
+                                      bool full_merge_or_nothing)
+@@ -359,8 +359,8 @@ s16 BTreeGeneric::mergeLeftIntoRight(ExclusivePageGuard<BTreeNode>& parent,
+    // -------------------------------------------------------------------------------------
+    // Do a partial merge
+    // Remove a key at a time from the merge and check if now it fits
+-   s16 till_slot_id = -1;
+-   for (s16 s_i = 0; s_i < from_left->count; s_i++) {
++   s32 till_slot_id = -1;
++   for (s32 s_i = 0; s_i < from_left->count; s_i++) {
+       space_upper_bound -= sizeof(BTreeNode::Slot) + from_left->getKeyLen(s_i) + from_left->getPayloadLength(s_i);
+       if (space_upper_bound + (from_left->getFullKeyLen(s_i) - to_right->lower_fence.length) < EFFECTIVE_PAGE_SIZE * 1.0) {
+          till_slot_id = s_i + 1;
+@@ -373,9 +373,9 @@ s16 BTreeGeneric::mergeLeftIntoRight(ExclusivePageGuard<BTreeNode>& parent,
+    assert((space_upper_bound + (from_left->getFullKeyLen(till_slot_id - 1) - to_right->lower_fence.length)) < EFFECTIVE_PAGE_SIZE * 1.0);
+    assert(till_slot_id > 0);
+    // -------------------------------------------------------------------------------------
+-   u16 copy_from_count = from_left->count - till_slot_id;
++   u32 copy_from_count = from_left->count - till_slot_id;
+    // -------------------------------------------------------------------------------------
+-   u16 new_left_uf_length = from_left->getFullKeyLen(till_slot_id - 1);
++   u32 new_left_uf_length = from_left->getFullKeyLen(till_slot_id - 1);
+    ensure(new_left_uf_length > 0);
+    u8 new_left_uf_key[new_left_uf_length];
+    from_left->copyFullKey(till_slot_id - 1, new_left_uf_key);
+@@ -424,9 +424,9 @@ BTreeGeneric::XMergeReturnCode BTreeGeneric::XMerge(HybridPageGuard<BTreeNode>&
+    }
+    // -------------------------------------------------------------------------------------
+    const u8 MAX_MERGE_PAGES = FLAGS_xmerge_k;
+-   s16 pos = parent_handler.pos;
++   s32 pos = parent_handler.pos;
+    u8 pages_count = 1;
+-   s16 max_right;
++   s32 max_right;
+    HybridPageGuard<BTreeNode> guards[MAX_MERGE_PAGES];
+    bool fully_merged[MAX_MERGE_PAGES];
+    // -------------------------------------------------------------------------------------
+@@ -463,7 +463,7 @@ BTreeGeneric::XMergeReturnCode BTreeGeneric::XMerge(HybridPageGuard<BTreeNode>&
+    p_x_guard.incrementGSN();
+    // -------------------------------------------------------------------------------------
+    XMergeReturnCode ret_code = XMergeReturnCode::PARTIAL_MERGE;
+-   s16 left_hand, right_hand, ret;
++   s32 left_hand, right_hand, ret;
+    while (true) {
+       for (right_hand = max_right; right_hand > pos; right_hand--) {
+          if (fully_merged[right_hand - pos]) {
+@@ -567,7 +567,7 @@ void BTreeGeneric::deserialize(BTreeGeneric& btree, std::unordered_map<std::stri
+    HybridLatch dummy_latch;
+    Guard dummy_guard(&dummy_latch);
+    dummy_guard.toOptimisticSpin();
+-   u16 failcounter = 0;
++   u32 failcounter = 0;
+    while (true) {
+       jumpmuTry()
+       {
+@@ -594,7 +594,7 @@ void BTreeGeneric::iterateChildrenSwips(void*, BufferFrame& bf, std::function<bo
+    if (c_node.is_leaf) {
+       return;
+    }
+-   for (u16 i = 0; i < c_node.count; i++) {
++   for (u32 i = 0; i < c_node.count; i++) {
+       if (!callback(c_node.getChild(i).cast<BufferFrame>())) {
+          return;
+       }
+@@ -612,7 +612,7 @@ s64 BTreeGeneric::iterateAllPagesRec(HybridPageGuard<BTreeNode>& node_guard,
+       return leaf(node_guard.ref());
+    }
+    s64 res = inner(node_guard.ref());
+-   for (u16 i = 0; i < node_guard->count; i++) {
++   for (u32 i = 0; i < node_guard->count; i++) {
+       Swip<BTreeNode>& c_swip = node_guard->getChild(i);
+       auto c_guard = HybridPageGuard(node_guard, c_swip);
+       c_guard.recheck();
+diff --git a/backend/leanstore/storage/btree/core/BTreeGeneric.hpp b/backend/leanstore/storage/btree/core/BTreeGeneric.hpp
+index 8fcec14..fd3bcec 100644
+--- a/backend/leanstore/storage/btree/core/BTreeGeneric.hpp
++++ b/backend/leanstore/storage/btree/core/BTreeGeneric.hpp
+@@ -62,9 +62,9 @@ class BTreeGeneric
+    // -------------------------------------------------------------------------------------
+    bool tryMerge(BufferFrame& to_split, bool swizzle_sibling = true);
+    // -------------------------------------------------------------------------------------
+-   void trySplit(BufferFrame& to_split, s16 pos = -1);
+-   s16 mergeLeftIntoRight(ExclusivePageGuard<BTreeNode>& parent,
+-                          s16 left_pos,
++   void trySplit(BufferFrame& to_split, s32 pos = -1);
++   s32 mergeLeftIntoRight(ExclusivePageGuard<BTreeNode>& parent,
++                          s32 left_pos,
+                           ExclusivePageGuard<BTreeNode>& from_left,
+                           ExclusivePageGuard<BTreeNode>& to_right,
+                           bool full_merge_or_nothing);
+@@ -82,13 +82,13 @@ class BTreeGeneric
+    // -------------------------------------------------------------------------------------
+    // Helpers
+    template <LATCH_FALLBACK_MODE mode = LATCH_FALLBACK_MODE::SHARED>
+-   inline void findLeafCanJump(HybridPageGuard<BTreeNode>& target_guard, const u8* key, const u16 key_length)
++   inline void findLeafCanJump(HybridPageGuard<BTreeNode>& target_guard, const u8* key, const u32 key_length)
+    {
+       target_guard.unlock();
+       HybridPageGuard<BTreeNode> p_guard(meta_node_bf);
+       target_guard = HybridPageGuard<BTreeNode>(p_guard, p_guard->upper);
+       // -------------------------------------------------------------------------------------
+-      u16 volatile level = 0;
++      u32 volatile level = 0;
+       // -------------------------------------------------------------------------------------
+       while (!target_guard->is_leaf) {
+          WorkerCounters::myCounters().dt_inner_page[dt_id]++;
+@@ -106,7 +106,7 @@ class BTreeGeneric
+    }
+    // -------------------------------------------------------------------------------------
+    template <LATCH_FALLBACK_MODE mode = LATCH_FALLBACK_MODE::SHARED>
+-   void findLeafAndLatch(HybridPageGuard<BTreeNode>& target_guard, const u8* key, u16 key_length)
++   void findLeafAndLatch(HybridPageGuard<BTreeNode>& target_guard, const u8* key, u32 key_length)
+    {
+       while (true) {
+          jumpmuTry()
+@@ -167,7 +167,7 @@ class BTreeGeneric
+       LATCH_FALLBACK_MODE latch_mode = LATCH_FALLBACK_MODE::JUMP;  // : LATCH_FALLBACK_MODE::EXCLUSIVE;
+       // -------------------------------------------------------------------------------------
+       HybridPageGuard<BTreeNode> p_guard(btree.meta_node_bf);
+-      u16 level = 0;
++      u32 level = 0;
+       // -------------------------------------------------------------------------------------
+       Swip<BTreeNode>* c_swip = &p_guard->upper;
+       if (btree.dt_id != to_find.page.dt_id || p_guard->upper.isEVICTED()) {
+@@ -176,7 +176,7 @@ class BTreeGeneric
+       }
+       // -------------------------------------------------------------------------------------
+       const bool infinity = c_node.upper_fence.offset == 0;
+-      const u16 key_length = c_node.upper_fence.length;
++      const u32 key_length = c_node.upper_fence.length;
+       u8* key = c_node.getUpperFenceKey();
+       // -------------------------------------------------------------------------------------
+       // check if bf is the root node
+@@ -193,7 +193,7 @@ class BTreeGeneric
+       // -------------------------------------------------------------------------------------
+       HybridPageGuard c_guard(p_guard, p_guard->upper,
+                               latch_mode);  // The parent of the bf we are looking for (to_find)
+-      s16 pos = -1;
++      s32 pos = -1;
+       auto search_condition = [&](HybridPageGuard<BTreeNode>& guard) {
+          if (infinity) {
+             c_swip = &(guard->upper);
+diff --git a/backend/leanstore/storage/btree/core/BTreeGenericIterator.hpp b/backend/leanstore/storage/btree/core/BTreeGenericIterator.hpp
+index 8aa2036..1bda4bc 100644
+--- a/backend/leanstore/storage/btree/core/BTreeGenericIterator.hpp
++++ b/backend/leanstore/storage/btree/core/BTreeGenericIterator.hpp
+@@ -35,13 +35,13 @@ class BTreePessimisticIterator : public BTreePessimisticIteratorInterface
+    bool shift_to_right_on_frozen_swips = true;
+    // -------------------------------------------------------------------------------------
+    u8 buffer[PAGE_SIZE];  // Used to copy key at cur and for upper_fence/lower_fence
+-   u16 fence_length = 0;
++   u32 fence_length = 0;
+    bool is_using_upper_fence;
+    // -------------------------------------------------------------------------------------
+   protected:
+    // We need a custom findLeafAndLatch to track the position in parent node
+    template <LATCH_FALLBACK_MODE mode = LATCH_FALLBACK_MODE::SHARED>
+-   void findLeafAndLatch(HybridPageGuard<BTreeNode>& target_guard, const u8* key, u16 key_length)
++   void findLeafAndLatch(HybridPageGuard<BTreeNode>& target_guard, const u8* key, u32 key_length)
+    {
+       while (true) {
+          leaf_pos_in_parent = -1;
+@@ -51,7 +51,7 @@ class BTreePessimisticIterator : public BTreePessimisticIteratorInterface
+             p_guard = HybridPageGuard<BTreeNode>(btree.meta_node_bf);
+             target_guard = HybridPageGuard<BTreeNode>(p_guard, p_guard->upper);
+             // -------------------------------------------------------------------------------------
+-            u16 volatile level = 0;
++            u32 volatile level = 0;
+             // -------------------------------------------------------------------------------------
+             while (!target_guard->is_leaf) {
+                WorkerCounters::myCounters().dt_inner_page[btree.dt_id]++;
+@@ -350,7 +350,7 @@ class BTreePessimisticIterator : public BTreePessimisticIteratorInterface
+    }
+    virtual Slice key() override { return Slice(buffer, leaf->getFullKeyLen(cur)); }
+    virtual MutableSlice mutableKeyInBuffer() { return MutableSlice(buffer, leaf->getFullKeyLen(cur)); }
+-   virtual MutableSlice mutableKeyInBuffer(u16 size)
++   virtual MutableSlice mutableKeyInBuffer(u32 size)
+    {
+       assert(size < PAGE_SIZE);
+       return MutableSlice(buffer, size);
+@@ -363,7 +363,7 @@ class BTreePessimisticIterator : public BTreePessimisticIteratorInterface
+    }
+    virtual Slice keyPrefix() override { return Slice(leaf->getPrefix(), leaf->prefix_length); }
+    virtual Slice keyWithoutPrefix() override { return Slice(leaf->getKey(cur), leaf->getKeyLen(cur)); }
+-   virtual u16 valueLength() { return leaf->getPayloadLength(cur); }
++   virtual u32 valueLength() { return leaf->getPayloadLength(cur); }
+    virtual Slice value() override { return Slice(leaf->getPayload(cur), leaf->getPayloadLength(cur)); }
+    // -------------------------------------------------------------------------------------
+    virtual bool keyInCurrentBoundaries(Slice key) { return leaf->compareKeyWithBoundaries(key.data(), key.length()) == 0; }
+@@ -428,15 +428,15 @@ class BTreeExclusiveIterator : public BTreePessimisticIterator
+          return OP_RESULT::OK;
+       }
+    }
+-   virtual OP_RESULT enoughSpaceInCurrentNode(const u16 key_length, const u16 value_length)
++   virtual OP_RESULT enoughSpaceInCurrentNode(const u32 key_length, const u32 value_length)
+    {
+       return (leaf->canInsert(key_length, value_length)) ? OP_RESULT::OK : OP_RESULT::NOT_ENOUGH_SPACE;
+    }
+-   virtual OP_RESULT enoughSpaceInCurrentNode(Slice key, const u16 value_length)
++   virtual OP_RESULT enoughSpaceInCurrentNode(Slice key, const u32 value_length)
+    {
+       return (leaf->canInsert(key.length(), value_length)) ? OP_RESULT::OK : OP_RESULT::NOT_ENOUGH_SPACE;
+    }
+-   virtual void insertInCurrentNode(Slice key, u16 value_length)
++   virtual void insertInCurrentNode(Slice key, u32 value_length)
+    {
+       assert(keyInCurrentBoundaries(key));
+       ensure(enoughSpaceInCurrentNode(key, value_length) == OP_RESULT::OK);
+@@ -497,9 +497,9 @@ class BTreeExclusiveIterator : public BTreePessimisticIterator
+    }
+    // -------------------------------------------------------------------------------------
+    // The caller must retain the payload when using any of the following payload resize functions
+-   virtual void shorten(const u16 new_size) { leaf->shortenPayload(cur, new_size); }
++   virtual void shorten(const u32 new_size) { leaf->shortenPayload(cur, new_size); }
+    // -------------------------------------------------------------------------------------
+-   bool extendPayload(const u16 new_length)
++   bool extendPayload(const u32 new_length)
+    {
+       if (new_length >= EFFECTIVE_PAGE_SIZE) {
+          return false;
+@@ -542,7 +542,7 @@ class BTreeExclusiveIterator : public BTreePessimisticIterator
+             leaf.bf->header.contention_tracker.access_counter = 0;
+             // -------------------------------------------------------------------------------------
+             if (last_modified_pos != cur && normalized_restarts >= FLAGS_cm_slowpath_threshold && leaf->count > 2) {
+-               s16 split_pos = std::min<s16>(last_modified_pos, cur);
++               s32 split_pos = std::min<s32>(last_modified_pos, cur);
+                leaf.unlock();
+                cur = -1;
+                jumpmuTry()
+diff --git a/backend/leanstore/storage/btree/core/BTreeNode.cpp b/backend/leanstore/storage/btree/core/BTreeNode.cpp
+index 81dc7ac..ad4c694 100644
+--- a/backend/leanstore/storage/btree/core/BTreeNode.cpp
++++ b/backend/leanstore/storage/btree/core/BTreeNode.cpp
+@@ -15,52 +15,52 @@ namespace btree
+ // -------------------------------------------------------------------------------------
+ void BTreeNode::makeHint()
+ {
+-   u16 dist = count / (hint_count + 1);
+-   for (u16 i = 0; i < hint_count; i++)
++   u32 dist = count / (hint_count + 1);
++   for (u32 i = 0; i < hint_count; i++)
+       hint[i] = slot[dist * (i + 1)].head;
+ }
+ // -------------------------------------------------------------------------------------
+-void BTreeNode::updateHint(u16 slotId)
++void BTreeNode::updateHint(u32 slotId)
+ {
+-   u16 dist = count / (hint_count + 1);
+-   u16 begin = 0;
++   u32 dist = count / (hint_count + 1);
++   u32 begin = 0;
+    if ((count > hint_count * 2 + 1) && (((count - 1) / (hint_count + 1)) == dist) && ((slotId / dist) > 1))
+       begin = (slotId / dist) - 1;
+-   for (u16 i = begin; i < hint_count; i++)
++   for (u32 i = begin; i < hint_count; i++)
+       hint[i] = slot[dist * (i + 1)].head;
+-   for (u16 i = 0; i < hint_count; i++)
++   for (u32 i = 0; i < hint_count; i++)
+       assert(hint[i] == slot[dist * (i + 1)].head);
+ }
+ // -------------------------------------------------------------------------------------
+-u16 BTreeNode::spaceNeeded(u16 key_len, u16 payload_len, u16 prefix_len)
++u32 BTreeNode::spaceNeeded(u32 key_len, u32 payload_len, u32 prefix_len)
+ {
+    return sizeof(Slot) + (key_len - prefix_len) + payload_len;
+ }
+ // -------------------------------------------------------------------------------------
+-u16 BTreeNode::spaceNeeded(u16 key_length, u16 payload_len)
++u32 BTreeNode::spaceNeeded(u32 key_length, u32 payload_len)
+ {
+    return spaceNeeded(key_length, payload_len, prefix_length);
+ }
+ // -------------------------------------------------------------------------------------
+-bool BTreeNode::canInsert(u16 key_len, u16 payload_len)
++bool BTreeNode::canInsert(u32 key_len, u32 payload_len)
+ {
+-   const u16 space_needed = spaceNeeded(key_len, payload_len);
++   const u32 space_needed = spaceNeeded(key_len, payload_len);
+    if (!hasEnoughSpaceFor(space_needed))
+       return false;  // no space, insert fails
+    else
+       return true;
+ }
+ // -------------------------------------------------------------------------------------
+-bool BTreeNode::prepareInsert(u16 key_len, u16 payload_len)
++bool BTreeNode::prepareInsert(u32 key_len, u32 payload_len)
+ {
+-   const u16 space_needed = spaceNeeded(key_len, payload_len);
++   const u32 space_needed = spaceNeeded(key_len, payload_len);
+    if (!requestSpaceFor(space_needed))
+       return false;  // no space, insert fails
+    else
+       return true;
+ }
+ // -------------------------------------------------------------------------------------
+-s16 BTreeNode::insertDoNotCopyPayload(const u8* key, u16 key_len, u16 payload_length, s32 pos)
++s32 BTreeNode::insertDoNotCopyPayload(const u8* key, u32 key_len, u32 payload_length, s32 pos)
+ {
+    assert(canInsert(key_len, payload_length));
+    prepareInsert(key_len, payload_length);
+@@ -74,7 +74,7 @@ s16 BTreeNode::insertDoNotCopyPayload(const u8* key, u16 key_len, u16 payload_le
+    slot[slotId].head = head(key, key_len);
+    slot[slotId].key_len = key_len;
+    slot[slotId].payload_len = payload_length;
+-   const u16 space = key_len + payload_length;
++   const u32 space = key_len + payload_length;
+    data_offset -= space;
+    space_used += space;
+    slot[slotId].offset = data_offset;
+@@ -85,7 +85,7 @@ s16 BTreeNode::insertDoNotCopyPayload(const u8* key, u16 key_len, u16 payload_le
+    return slotId;
+ }
+ // -------------------------------------------------------------------------------------
+-s32 BTreeNode::insert(const u8* key, u16 key_len, const u8* payload, u16 payload_length)
++s32 BTreeNode::insert(const u8* key, u32 key_len, const u8* payload, u32 payload_length)
+ {
+    DEBUG_BLOCK()
+    {
+@@ -113,7 +113,7 @@ s32 BTreeNode::insert(const u8* key, u16 key_len, const u8* payload, u16 payload
+ // -------------------------------------------------------------------------------------
+ void BTreeNode::compactify()
+ {
+-   u16 should = freeSpaceAfterCompaction();
++   u32 should = freeSpaceAfterCompaction();
+    static_cast<void>(should);
+    BTreeNode tmp(is_leaf);
+    tmp.setFences(getLowerFenceKey(), lower_fence.length, getUpperFenceKey(), upper_fence.length);
+@@ -135,23 +135,23 @@ u32 BTreeNode::mergeSpaceUpperBound(ExclusivePageGuard<BTreeNode>& right)
+    return spaceUpperBound;
+ }
+ // -------------------------------------------------------------------------------------
+-u32 BTreeNode::spaceUsedBySlot(u16 s_i)
++u32 BTreeNode::spaceUsedBySlot(u32 s_i)
+ {
+    return sizeof(BTreeNode::Slot) + getKeyLen(s_i) + getPayloadLength(s_i);
+ }
+ // -------------------------------------------------------------------------------------
+ // right survives, this gets reclaimed
+ // left(this) into right
+-bool BTreeNode::merge(u16 slotId, ExclusivePageGuard<BTreeNode>& parent, ExclusivePageGuard<BTreeNode>& right)
++bool BTreeNode::merge(u32 slotId, ExclusivePageGuard<BTreeNode>& parent, ExclusivePageGuard<BTreeNode>& right)
+ {
+    if (is_leaf) {
+       assert(right->is_leaf);
+       assert(parent->isInner());
+       BTreeNode tmp(is_leaf);
+       tmp.setFences(getLowerFenceKey(), lower_fence.length, right->getUpperFenceKey(), right->upper_fence.length);
+-      u16 leftGrow = (prefix_length - tmp.prefix_length) * count;
+-      u16 rightGrow = (right->prefix_length - tmp.prefix_length) * right->count;
+-      u16 spaceUpperBound = space_used + right->space_used + (reinterpret_cast<u8*>(slot + count + right->count) - ptr()) + leftGrow + rightGrow;
++      u32 leftGrow = (prefix_length - tmp.prefix_length) * count;
++      u32 rightGrow = (right->prefix_length - tmp.prefix_length) * right->count;
++      u32 spaceUpperBound = space_used + right->space_used + (reinterpret_cast<u8*>(slot + count + right->count) - ptr()) + leftGrow + rightGrow;
+       if (spaceUpperBound > EFFECTIVE_PAGE_SIZE) {
+          return false;
+       }
+@@ -169,10 +169,10 @@ bool BTreeNode::merge(u16 slotId, ExclusivePageGuard<BTreeNode>& parent, Exclusi
+       assert(parent->isInner());
+       BTreeNode tmp(is_leaf);
+       tmp.setFences(getLowerFenceKey(), lower_fence.length, right->getUpperFenceKey(), right->upper_fence.length);
+-      u16 leftGrow = (prefix_length - tmp.prefix_length) * count;
+-      u16 rightGrow = (right->prefix_length - tmp.prefix_length) * right->count;
+-      u16 extraKeyLength = parent->getFullKeyLen(slotId);
+-      u16 spaceUpperBound = space_used + right->space_used + (reinterpret_cast<u8*>(slot + count + right->count) - ptr()) + leftGrow + rightGrow +
++      u32 leftGrow = (prefix_length - tmp.prefix_length) * count;
++      u32 rightGrow = (right->prefix_length - tmp.prefix_length) * right->count;
++      u32 extraKeyLength = parent->getFullKeyLen(slotId);
++      u32 spaceUpperBound = space_used + right->space_used + (reinterpret_cast<u8*>(slot + count + right->count) - ptr()) + leftGrow + rightGrow +
+                             spaceNeeded(extraKeyLength, sizeof(SwipType), tmp.prefix_length);
+       if (spaceUpperBound > EFFECTIVE_PAGE_SIZE)
+          return false;
+@@ -190,7 +190,7 @@ bool BTreeNode::merge(u16 slotId, ExclusivePageGuard<BTreeNode>& parent, Exclusi
+    }
+ }
+ // -------------------------------------------------------------------------------------
+-void BTreeNode::storeKeyValue(u16 slotId, const u8* key, u16 key_len, const u8* payload, const u16 payload_len)
++void BTreeNode::storeKeyValue(u32 slotId, const u8* key, u32 key_len, const u8* payload, const u32 payload_len)
+ {
+    // Head
+    key += prefix_length;
+@@ -200,7 +200,7 @@ void BTreeNode::storeKeyValue(u16 slotId, const u8* key, u16 key_len, const u8*
+    slot[slotId].key_len = key_len;
+    slot[slotId].payload_len = payload_len;
+    // Value
+-   const u16 space = key_len + payload_len;
++   const u32 space = key_len + payload_len;
+    data_offset -= space;
+    space_used += space;
+    slot[slotId].offset = data_offset;
+@@ -212,7 +212,7 @@ void BTreeNode::storeKeyValue(u16 slotId, const u8* key, u16 key_len, const u8*
+ }
+ // -------------------------------------------------------------------------------------
+ // ATTENTION: dstSlot then srcSlot !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+-void BTreeNode::copyKeyValueRange(BTreeNode* dst, u16 dstSlot, u16 srcSlot, u16 count)
++void BTreeNode::copyKeyValueRange(BTreeNode* dst, u32 dstSlot, u32 srcSlot, u32 count)
+ {
+    if (prefix_length == dst->prefix_length) {
+       // Fast path
+@@ -220,12 +220,12 @@ void BTreeNode::copyKeyValueRange(BTreeNode* dst, u16 dstSlot, u16 srcSlot, u16
+       DEBUG_BLOCK()
+       {
+          u32 total_space_used = upper_fence.length + lower_fence.length;
+-         for (u16 i = 0; i < this->count; i++) {
++         for (u32 i = 0; i < this->count; i++) {
+             total_space_used += getKeyLen(i) + getPayloadLength(i);
+          }
+          assert(total_space_used == this->space_used);
+       }
+-      for (u16 i = 0; i < count; i++) {
++      for (u32 i = 0; i < count; i++) {
+          u32 kv_size = getKeyLen(srcSlot + i) + getPayloadLength(srcSlot + i);
+          dst->data_offset -= kv_size;
+          dst->space_used += kv_size;
+@@ -238,22 +238,22 @@ void BTreeNode::copyKeyValueRange(BTreeNode* dst, u16 dstSlot, u16 srcSlot, u16
+          memcpy(dst->ptr() + dst->data_offset, ptr() + slot[srcSlot + i].offset, kv_size);
+       }
+    } else {
+-      for (u16 i = 0; i < count; i++)
++      for (u32 i = 0; i < count; i++)
+          copyKeyValue(srcSlot + i, dst, dstSlot + i);
+    }
+    dst->count += count;
+    assert((dst->ptr() + dst->data_offset) >= reinterpret_cast<u8*>(dst->slot + dst->count));
+ }
+ // -------------------------------------------------------------------------------------
+-void BTreeNode::copyKeyValue(u16 srcSlot, BTreeNode* dst, u16 dstSlot)
++void BTreeNode::copyKeyValue(u32 srcSlot, BTreeNode* dst, u32 dstSlot)
+ {
+-   u16 fullLength = getFullKeyLen(srcSlot);
++   u32 fullLength = getFullKeyLen(srcSlot);
+    u8 key[fullLength];
+    copyFullKey(srcSlot, key);
+    dst->storeKeyValue(dstSlot, key, fullLength, getPayload(srcSlot), getPayloadLength(srcSlot));
+ }
+ // -------------------------------------------------------------------------------------
+-void BTreeNode::insertFence(BTreeNodeHeader::FenceKey& fk, u8* key, u16 keyLength)
++void BTreeNode::insertFence(BTreeNodeHeader::FenceKey& fk, u8* key, u32 keyLength)
+ {
+    if (!key)
+       return;
+@@ -265,7 +265,7 @@ void BTreeNode::insertFence(BTreeNodeHeader::FenceKey& fk, u8* key, u16 keyLengt
+    memcpy(ptr() + data_offset, key, keyLength);
+ }
+ // -------------------------------------------------------------------------------------
+-void BTreeNode::setFences(u8* lowerKey, u16 lowerLen, u8* upperKey, u16 upperLen)
++void BTreeNode::setFences(u8* lowerKey, u32 lowerLen, u8* upperKey, u32 upperLen)
+ {
+    insertFence(lower_fence, lowerKey, lowerLen);
+    insertFence(upper_fence, upperKey, upperLen);
+@@ -277,7 +277,7 @@ void BTreeNode::setFences(u8* lowerKey, u16 lowerLen, u8* upperKey, u16 upperLen
+    }
+ }
+ // -------------------------------------------------------------------------------------
+-u16 BTreeNode::commonPrefix(u16 slotA, u16 slotB)
++u32 BTreeNode::commonPrefix(u32 slotA, u32 slotB)
+ {
+    if (count == 0) {  // Do not prefix compress if only one tuple is in to avoid corner cases (e.g., SI Version)
+       return 0;
+@@ -300,15 +300,15 @@ BTreeNode::SeparatorInfo BTreeNode::findSep()
+    assert(count > 1);
+    if (isInner()) {
+       // Inner nodes are split in the middle
+-      u16 slotId = count / 2;
+-      return SeparatorInfo{static_cast<u16>(prefix_length + slot[slotId].key_len), slotId, false};
++      u32 slotId = count / 2;
++      return SeparatorInfo{static_cast<u32>(prefix_length + slot[slotId].key_len), slotId, false};
+    }
+ 
+    // Find good separator slot
+-   u16 bestPrefixLength, bestSlot;
++   u32 bestPrefixLength, bestSlot;
+    if (count > 16) {
+-      u16 lower = (count / 2) - (count / 16);
+-      u16 upper = (count / 2);
++      u32 lower = (count / 2) - (count / 16);
++      u32 upper = (count / 2);
+ 
+       bestPrefixLength = commonPrefix(lower, 0);
+       bestSlot = lower;
+@@ -322,11 +322,11 @@ BTreeNode::SeparatorInfo BTreeNode::findSep()
+    }
+ 
+    // Try to truncate separator
+-   u16 common = commonPrefix(bestSlot, bestSlot + 1);
++   u32 common = commonPrefix(bestSlot, bestSlot + 1);
+    if ((bestSlot + 1 < count) && (slot[bestSlot].key_len > common) && (slot[bestSlot + 1].key_len > (common + 1)))
+-      return SeparatorInfo{static_cast<u16>(prefix_length + common + 1), bestSlot, true};
++      return SeparatorInfo{static_cast<u32>(prefix_length + common + 1), bestSlot, true};
+ 
+-   return SeparatorInfo{static_cast<u16>(prefix_length + slot[bestSlot].key_len), bestSlot, false};
++   return SeparatorInfo{static_cast<u32>(prefix_length + slot[bestSlot].key_len), bestSlot, false};
+ }
+ // -------------------------------------------------------------------------------------
+ void BTreeNode::getSep(u8* sepKeyOut, BTreeNodeHeader::SeparatorInfo info)
+@@ -339,7 +339,7 @@ void BTreeNode::getSep(u8* sepKeyOut, BTreeNodeHeader::SeparatorInfo info)
+    }
+ }
+ // -------------------------------------------------------------------------------------
+-s32 BTreeNode::compareKeyWithBoundaries(const u8* key, u16 keyLength)
++s32 BTreeNode::compareKeyWithBoundaries(const u8* key, u32 keyLength)
+ {
+    // Lower Bound exclusive, upper bound inclusive
+    if (lower_fence.offset) {
+@@ -355,7 +355,7 @@ s32 BTreeNode::compareKeyWithBoundaries(const u8* key, u16 keyLength)
+    return 0;
+ }
+ // -------------------------------------------------------------------------------------
+-Swip<BTreeNode>& BTreeNode::lookupInner(const u8* key, u16 keyLength)
++Swip<BTreeNode>& BTreeNode::lookupInner(const u8* key, u32 keyLength)
+ {
+    s32 pos = lowerBound<false>(key, keyLength);
+    if (pos == count)
+@@ -364,7 +364,7 @@ Swip<BTreeNode>& BTreeNode::lookupInner(const u8* key, u16 keyLength)
+ }
+ // -------------------------------------------------------------------------------------
+ // This = right
+-void BTreeNode::split(ExclusivePageGuard<BTreeNode>& parent, ExclusivePageGuard<BTreeNode>& nodeLeft, u16 sepSlot, u8* sepKey, u16 sepLength)
++void BTreeNode::split(ExclusivePageGuard<BTreeNode>& parent, ExclusivePageGuard<BTreeNode>& nodeLeft, u32 sepSlot, u8* sepKey, u32 sepLength)
+ {
+    // PRE: current, parent and nodeLeft are x locked
+    // assert(sepSlot > 0); TODO: really ?
+@@ -395,7 +395,7 @@ void BTreeNode::split(ExclusivePageGuard<BTreeNode>& parent, ExclusivePageGuard<
+    memcpy(reinterpret_cast<char*>(this), nodeRight, sizeof(BTreeNode));
+ }
+ // -------------------------------------------------------------------------------------
+-bool BTreeNode::removeSlot(u16 slotId)
++bool BTreeNode::removeSlot(u32 slotId)
+ {
+    space_used -= getKeyLen(slotId) + getPayloadLength(slotId);
+    memmove(slot + slotId, slot + slotId + 1, sizeof(Slot) * (count - slotId - 1));
+@@ -404,7 +404,7 @@ bool BTreeNode::removeSlot(u16 slotId)
+    return true;
+ }
+ // -------------------------------------------------------------------------------------
+-bool BTreeNode::remove(const u8* key, const u16 keyLength)
++bool BTreeNode::remove(const u8* key, const u32 keyLength)
+ {
+    int slotId = lowerBound<true>(key, keyLength);
+    if (slotId == -1)
+diff --git a/backend/leanstore/storage/btree/core/BTreeNode.hpp b/backend/leanstore/storage/btree/core/BTreeNode.hpp
+index 7ac987e..434fb02 100644
+--- a/backend/leanstore/storage/btree/core/BTreeNode.hpp
++++ b/backend/leanstore/storage/btree/core/BTreeNode.hpp
+@@ -46,31 +46,31 @@ static inline u8 swap(u8 x)
+ }
+ // -------------------------------------------------------------------------------------
+ struct BTreeNodeHeader {
+-   static const u16 underFullSize = EFFECTIVE_PAGE_SIZE * 0.6;
+-   static const u16 K_WAY_MERGE_THRESHOLD = EFFECTIVE_PAGE_SIZE * 0.45;
++   static const u64 underFullSize = EFFECTIVE_PAGE_SIZE * 0.6;
++   static const u64 K_WAY_MERGE_THRESHOLD = EFFECTIVE_PAGE_SIZE * 0.45;
+ 
+    struct SeparatorInfo {
+-      u16 length;
+-      u16 slot;
++      u32 length;
++      u32 slot;
+       bool trunc;  // TODO: ???
+    };
+ 
+    struct FenceKey {
+-      u16 offset;
+-      u16 length;
++      u32 offset;
++      u32 length;
+    };
+ 
+    Swip<BTreeNode> upper = nullptr;
+    FenceKey lower_fence = {0, 0};
+    FenceKey upper_fence = {0, 0};
+ 
+-   u16 count = 0;  // count number of separators, excluding the upper swip
++   u32 count = 0;  // count number of separators, excluding the upper swip
+    bool is_leaf;
+-   u16 space_used = 0;  // does not include the header, but includes fences !!!!!
+-   u16 data_offset = static_cast<u16>(EFFECTIVE_PAGE_SIZE);
+-   u16 prefix_length = 0;
++   u32 space_used = 0;  // does not include the header, but includes fences !!!!!
++   u32 data_offset = static_cast<u32>(EFFECTIVE_PAGE_SIZE);
++   u32 prefix_length = 0;
+ 
+-   static const u16 hint_count = 16;
++   static const u32 hint_count = 16;
+    u32 hint[hint_count];
+    // -------------------------------------------------------------------------------------
+    // Needed for GC
+@@ -90,9 +90,9 @@ struct BTreeNodeHeader {
+ struct BTreeNode : public BTreeNodeHeader {
+    struct __attribute__((packed)) Slot {
+       // Layout:  key wihtout prefix | Payload
+-      u16 offset;
+-      u16 key_len;
+-      u16 payload_len;
++      u32 offset;
++      u32 key_len;
++      u32 payload_len;
+       union {
+          HeadType head;
+          u8 head_bytes[4];
+@@ -106,14 +106,14 @@ struct BTreeNode : public BTreeNodeHeader {
+ 
+    BTreeNode(bool is_leaf) : BTreeNodeHeader(is_leaf) {}
+ 
+-   u16 freeSpace() { return data_offset - (reinterpret_cast<u8*>(slot + count) - ptr()); }
+-   u16 freeSpaceAfterCompaction() { return EFFECTIVE_PAGE_SIZE - (reinterpret_cast<u8*>(slot + count) - ptr()) - space_used; }
++   u32 freeSpace() { return data_offset - (reinterpret_cast<u8*>(slot + count) - ptr()); }
++   u32 freeSpaceAfterCompaction() { return EFFECTIVE_PAGE_SIZE - (reinterpret_cast<u8*>(slot + count) - ptr()) - space_used; }
+    // -------------------------------------------------------------------------------------
+    double fillFactorAfterCompaction() { return (1 - (freeSpaceAfterCompaction() * 1.0 / EFFECTIVE_PAGE_SIZE)); }
+    // -------------------------------------------------------------------------------------
+    bool hasEnoughSpaceFor(u32 space_needed) { return (space_needed <= freeSpace() || space_needed <= freeSpaceAfterCompaction()); }
+    // ATTENTION: this method has side effects !
+-   bool requestSpaceFor(u16 space_needed)
++   bool requestSpaceFor(u32 space_needed)
+    {
+       if (space_needed <= freeSpace())
+          return true;
+@@ -124,38 +124,38 @@ struct BTreeNode : public BTreeNodeHeader {
+       return false;
+    }
+    // -------------------------------------------------------------------------------------
+-   inline u8* getKey(u16 slotId) { return ptr() + slot[slotId].offset; }
+-   inline u16 getKeyLen(u16 slotId) { return slot[slotId].key_len; }
+-   inline u16 getFullKeyLen(u16 slotId) { return prefix_length + getKeyLen(slotId); }
+-   inline u16 getPayloadLength(u16 slotId) { return slot[slotId].payload_len; }
+-   inline u8* getPayload(u16 slotId) { return ptr() + slot[slotId].offset + slot[slotId].key_len; }
+-   inline SwipType& getChild(u16 slotId) { return *reinterpret_cast<SwipType*>(getPayload(slotId)); }
+-   inline u16 getKVConsumedSpace(u16 slot_id) { return sizeof(Slot) + getKeyLen(slot_id) + getPayloadLength(slot_id); }
++   inline u8* getKey(u32 slotId) { return ptr() + slot[slotId].offset; }
++   inline u32 getKeyLen(u32 slotId) { return slot[slotId].key_len; }
++   inline u32 getFullKeyLen(u32 slotId) { return prefix_length + getKeyLen(slotId); }
++   inline u32 getPayloadLength(u32 slotId) { return slot[slotId].payload_len; }
++   inline u8* getPayload(u32 slotId) { return ptr() + slot[slotId].offset + slot[slotId].key_len; }
++   inline SwipType& getChild(u32 slotId) { return *reinterpret_cast<SwipType*>(getPayload(slotId)); }
++   inline u32 getKVConsumedSpace(u32 slot_id) { return sizeof(Slot) + getKeyLen(slot_id) + getPayloadLength(slot_id); }
+    // -------------------------------------------------------------------------------------
+    // Attention: the caller has to hold a copy of the existing payload
+-   inline void shortenPayload(u16 slotId, u16 len)
++   inline void shortenPayload(u32 slotId, u32 len)
+    {
+       assert(len <= slot[slotId].payload_len);
+-      const u16 freed_space = slot[slotId].payload_len - len;
++      const u32 freed_space = slot[slotId].payload_len - len;
+       space_used -= freed_space;
+       slot[slotId].payload_len = len;
+    }
+-   inline bool canExtendPayload(u16 slot_id, u16 new_length)
++   inline bool canExtendPayload(u32 slot_id, u32 new_length)
+    {
+       assert(new_length > getPayloadLength(slot_id));
+-      const u16 extra_space_needed = new_length - getPayloadLength(slot_id);
++      const u32 extra_space_needed = new_length - getPayloadLength(slot_id);
+       return freeSpaceAfterCompaction() >= extra_space_needed;
+    }
+-   void extendPayload(u16 slot_id, u16 new_payload_length)
++   void extendPayload(u32 slot_id, u32 new_payload_length)
+    {
+       // Move key | payload to a new location
+       assert(canExtendPayload(slot_id, new_payload_length));
+-      const u16 extra_space_needed = new_payload_length - getPayloadLength(slot_id);
++      const u32 extra_space_needed = new_payload_length - getPayloadLength(slot_id);
+       requestSpaceFor(extra_space_needed);
+       // -------------------------------------------------------------------------------------
+-      const u16 key_length = getKeyLen(slot_id);
+-      const u16 old_total_length = key_length + getPayloadLength(slot_id);
+-      const u16 new_total_length = key_length + new_payload_length;
++      const u32 key_length = getKeyLen(slot_id);
++      const u32 old_total_length = key_length + getPayloadLength(slot_id);
++      const u32 new_total_length = key_length + new_payload_length;
+       u8 key[key_length];
+       std::memcpy(key, getKey(slot_id), key_length);
+       space_used -= old_total_length;
+@@ -178,16 +178,16 @@ struct BTreeNode : public BTreeNodeHeader {
+    // -------------------------------------------------------------------------------------
+    inline u8* getPrefix() { return getLowerFenceKey(); }
+    inline void copyPrefix(u8* out) { memcpy(out, getLowerFenceKey(), prefix_length); }
+-   inline void copyKeyWithoutPrefix(u16 slotId, u8* out_after_prefix) { memcpy(out_after_prefix, getKey(slotId), getKeyLen(slotId)); }
+-   inline void copyFullKey(u16 slotId, u8* out)
++   inline void copyKeyWithoutPrefix(u32 slotId, u8* out_after_prefix) { memcpy(out_after_prefix, getKey(slotId), getKeyLen(slotId)); }
++   inline void copyFullKey(u32 slotId, u8* out)
+    {
+       memcpy(out, getPrefix(), prefix_length);
+       memcpy(out + prefix_length, getKey(slotId), getKeyLen(slotId));
+    }
+    // -------------------------------------------------------------------------------------
+-   static inline s32 cmpKeys(const u8* a, const u8* b, u16 a_length, u16 b_length)
++   static inline s32 cmpKeys(const u8* a, const u8* b, u32 a_length, u32 b_length)
+    {
+-      u16 length = min(a_length, b_length);
++      u32 length = min(a_length, b_length);
+       if (length < 4) {
+          while (length-- > 0) {
+             if (*a++ != *b++)
+@@ -201,7 +201,7 @@ struct BTreeNode : public BTreeNodeHeader {
+          return (a_length - b_length);
+       }
+    }
+-   static inline HeadType head(const u8* key, u16& key_length)
++   static inline HeadType head(const u8* key, u32& key_length)
+    {
+       switch (key_length) {
+          case 0:
+@@ -209,24 +209,24 @@ struct BTreeNode : public BTreeNodeHeader {
+          case 1:
+             return static_cast<u32>(key[0]) << 24;
+          case 2:
+-            return static_cast<u32>(__builtin_bswap16(*reinterpret_cast<const u16*>(key))) << 16;
++            return static_cast<u32>(__builtin_bswap16(*reinterpret_cast<const u32*>(key))) << 16;
+          case 3:
+-            return (static_cast<u32>(__builtin_bswap16(*reinterpret_cast<const u16*>(key))) << 16) | (static_cast<u32>(key[2]) << 8);
++            return (static_cast<u32>(__builtin_bswap16(*reinterpret_cast<const u32*>(key))) << 16) | (static_cast<u32>(key[2]) << 8);
+          default:
+             return __builtin_bswap32(*reinterpret_cast<const u32*>(key));
+       }
+    }
+    void makeHint();
+    // -------------------------------------------------------------------------------------
+-   s32 compareKeyWithBoundaries(const u8* key, u16 key_length);
++   s32 compareKeyWithBoundaries(const u8* key, u32 key_length);
+    // -------------------------------------------------------------------------------------
+-   void searchHint(HeadType key_head, u16& lower_out, u16& upper_out)
++   void searchHint(HeadType key_head, u32& lower_out, u32& upper_out)
+    {
+       if (count > hint_count * 2) {
+          if (FLAGS_btree_hints == 2) {
+ #ifdef __AVX512F__
+-            const u16 dist = count / (hint_count + 1);
+-            u16 pos, pos2;
++            const u32 dist = count / (hint_count + 1);
++            u32 pos, pos2;
+             __m512i key_head_reg = _mm512_set1_epi32(key_head);
+             __m512i chunk = _mm512_loadu_si512(hint);
+             __mmask16 compareMask = _mm512_cmpge_epu32_mask(chunk, key_head_reg);
+@@ -247,8 +247,8 @@ struct BTreeNode : public BTreeNodeHeader {
+             throw;
+ #endif
+          } else if (FLAGS_btree_hints == 1) {
+-            const u16 dist = count / (hint_count + 1);
+-            u16 pos, pos2;
++            const u32 dist = count / (hint_count + 1);
++            u32 pos, pos2;
+             // -------------------------------------------------------------------------------------
+             for (pos = 0; pos < hint_count; pos++) {
+                if (hint[pos] >= key_head) {
+@@ -279,7 +279,7 @@ struct BTreeNode : public BTreeNodeHeader {
+    }
+    // -------------------------------------------------------------------------------------
+    template <bool equality_only = false>
+-   s16 linearSearchWithBias(const u8* key, u16 key_length, u16 start_pos, bool higher = true)
++   s32 linearSearchWithBias(const u8* key, u32 key_length, u32 start_pos, bool higher = true)
+    {
+       throw;
+       // EXP
+@@ -328,7 +328,7 @@ struct BTreeNode : public BTreeNodeHeader {
+    // Returns the position where the key[pos] (if exists) >= key (not less than the given key)
+    // Asc: (2) (2) (1) -> (2) (2) (1) (0) -> (2) (2) (1) (0) (0) -> ...  -> (2) (2) (2)
+    template <bool equalityOnly = false>
+-   s16 lowerBound(const u8* key, u16 keyLength, bool* is_equal = nullptr)
++   s32 lowerBound(const u8* key, u32 keyLength, bool* is_equal = nullptr)
+    {
+       if (is_equal != nullptr && is_leaf) {
+          *is_equal = false;
+@@ -337,7 +337,7 @@ struct BTreeNode : public BTreeNodeHeader {
+          if ((keyLength < prefix_length) || (bcmp(key, getLowerFenceKey(), prefix_length) != 0))
+             return -1;
+       } else {
+-         int prefixCmp = cmpKeys(key, getLowerFenceKey(), min<u16>(keyLength, prefix_length), prefix_length);
++         int prefixCmp = cmpKeys(key, getLowerFenceKey(), min<u32>(keyLength, prefix_length), prefix_length);
+          if (prefixCmp < 0)
+             return 0;
+          else if (prefixCmp > 0)
+@@ -347,12 +347,12 @@ struct BTreeNode : public BTreeNodeHeader {
+       key += prefix_length;
+       keyLength -= prefix_length;
+ 
+-      u16 lower = 0;
+-      u16 upper = count;
++      u32 lower = 0;
++      u32 upper = count;
+       HeadType keyHead = head(key, keyLength);
+       searchHint(keyHead, lower, upper);
+       while (lower < upper) {
+-         u16 mid = ((upper - lower) / 2) + lower;
++         u32 mid = ((upper - lower) / 2) + lower;
+          if (FLAGS_btree_heads) {
+             if (keyHead < slot[mid].head) {
+                upper = mid;
+@@ -402,38 +402,38 @@ struct BTreeNode : public BTreeNodeHeader {
+       return lower;
+    }
+    // -------------------------------------------------------------------------------------
+-   void updateHint(u16 slotId);
++   void updateHint(u32 slotId);
+    // -------------------------------------------------------------------------------------
+-   s16 insertDoNotCopyPayload(const u8* key, u16 key_len, u16 payload_len, s32 pos = -1);
+-   s32 insert(const u8* key, u16 key_len, const u8* payload, u16 payload_len);
+-   static u16 spaceNeeded(u16 keyLength, u16 payload_len, u16 prefixLength);
+-   u16 spaceNeeded(u16 key_length, u16 payload_len);
+-   bool canInsert(u16 key_length, u16 payload_len);
+-   bool prepareInsert(u16 keyLength, u16 payload_len);
++   s32 insertDoNotCopyPayload(const u8* key, u32 key_len, u32 payload_len, s32 pos = -1);
++   s32 insert(const u8* key, u32 key_len, const u8* payload, u32 payload_len);
++   static u32 spaceNeeded(u32 keyLength, u32 payload_len, u32 prefixLength);
++   u32 spaceNeeded(u32 key_length, u32 payload_len);
++   bool canInsert(u32 key_length, u32 payload_len);
++   bool prepareInsert(u32 keyLength, u32 payload_len);
+    // -------------------------------------------------------------------------------------
+    void compactify();
+    // -------------------------------------------------------------------------------------
+    // merge right node into this node
+    u32 mergeSpaceUpperBound(ExclusivePageGuard<BTreeNode>& right);
+-   u32 spaceUsedBySlot(u16 slot_id);
++   u32 spaceUsedBySlot(u32 slot_id);
+    // -------------------------------------------------------------------------------------
+-   bool merge(u16 slotId, ExclusivePageGuard<BTreeNode>& parent, ExclusivePageGuard<BTreeNode>& right);
++   bool merge(u32 slotId, ExclusivePageGuard<BTreeNode>& parent, ExclusivePageGuard<BTreeNode>& right);
+    // store key/value pair at slotId
+-   void storeKeyValue(u16 slotId, const u8* key, u16 key_len, const u8* payload, u16 payload_len);
++   void storeKeyValue(u32 slotId, const u8* key, u32 key_len, const u8* payload, u32 payload_len);
+    // ATTENTION: dstSlot then srcSlot !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+-   void copyKeyValueRange(BTreeNode* dst, u16 dstSlot, u16 srcSlot, u16 count);
+-   void copyKeyValue(u16 srcSlot, BTreeNode* dst, u16 dstSlot);
+-   void insertFence(FenceKey& fk, u8* key, u16 keyLength);
+-   void setFences(u8* lowerKey, u16 lowerLen, u8* upperKey, u16 upperLen);
+-   void split(ExclusivePageGuard<BTreeNode>& parent, ExclusivePageGuard<BTreeNode>& new_node, u16 sepSlot, u8* sepKey, u16 sepLength);
+-   u16 commonPrefix(u16 aPos, u16 bPos);
++   void copyKeyValueRange(BTreeNode* dst, u32 dstSlot, u32 srcSlot, u32 count);
++   void copyKeyValue(u32 srcSlot, BTreeNode* dst, u32 dstSlot);
++   void insertFence(FenceKey& fk, u8* key, u32 keyLength);
++   void setFences(u8* lowerKey, u32 lowerLen, u8* upperKey, u32 upperLen);
++   void split(ExclusivePageGuard<BTreeNode>& parent, ExclusivePageGuard<BTreeNode>& new_node, u32 sepSlot, u8* sepKey, u32 sepLength);
++   u32 commonPrefix(u32 aPos, u32 bPos);
+    SeparatorInfo findSep();
+    void getSep(u8* sepKeyOut, SeparatorInfo info);
+-   Swip<BTreeNode>& lookupInner(const u8* key, u16 keyLength);
++   Swip<BTreeNode>& lookupInner(const u8* key, u32 keyLength);
+    // -------------------------------------------------------------------------------------
+    // Not synchronized or todo section
+-   bool removeSlot(u16 slotId);
+-   bool remove(const u8* key, const u16 keyLength);
++   bool removeSlot(u32 slotId);
++   bool remove(const u8* key, const u32 keyLength);
+    void reset();
+ };  // namespace btree
+ // -------------------------------------------------------------------------------------
+diff --git a/backend/leanstore/storage/btree/core/WALMacros.hpp b/backend/leanstore/storage/btree/core/WALMacros.hpp
+index 2299f93..aca746a 100644
+--- a/backend/leanstore/storage/btree/core/WALMacros.hpp
++++ b/backend/leanstore/storage/btree/core/WALMacros.hpp
+@@ -11,17 +11,17 @@
+ #define beforeBody(Type, Attribute, tuple, entry)                    \
+    const auto Attribute##_offset = offsetof(Type, Attribute);        \
+    const auto Attribute##_size = sizeof(Type::Attribute);            \
+-   *reinterpret_cast<u16*>(entry) = Attribute##_offset;              \
+-   entry += sizeof(u16);                                             \
+-   *reinterpret_cast<u16*>(entry) = Attribute##_size;                \
+-   entry += sizeof(u16);                                             \
++   *reinterpret_cast<u32*>(entry) = Attribute##_offset;              \
++   entry += sizeof(u32);                                             \
++   *reinterpret_cast<u32*>(entry) = Attribute##_size;                \
++   entry += sizeof(u32);                                             \
+    std::memcpy(entry, tuple + Attribute##_offset, Attribute##_size); \
+    entry += Attribute##_size;
+ 
+ #define afterBody(Type, Attribute, tuple, entry)              \
+    const auto Attribute##_offset = offsetof(Type, Attribute); \
+    const auto Attribute##_size = sizeof(Type::Attribute);     \
+-   entry += (sizeof(u16) * 2);                                \
++   entry += (sizeof(u32) * 2);                                \
+    for (u64 b_i = 0; b_i < Attribute##_size; b_i++) {         \
+       *(entry + b_i) ^= *(tuple + Attribute##_offset + b_i);  \
+    }                                                          \
+@@ -31,17 +31,17 @@
+ #define beforeBody(Type, Attribute, tuple, entry)                    \
+    const auto Attribute##_offset = offsetof(Type, Attribute);        \
+    const auto Attribute##_size = sizeof(Type::Attribute);            \
+-   *reinterpret_cast<u16*>(entry) = Attribute##_offset;              \
+-   entry += sizeof(u16);                                             \
+-   *reinterpret_cast<u16*>(entry) = Attribute##_size;                \
+-   entry += sizeof(u16);                                             \
++   *reinterpret_cast<u32*>(entry) = Attribute##_offset;              \
++   entry += sizeof(u32);                                             \
++   *reinterpret_cast<u32*>(entry) = Attribute##_size;                \
++   entry += sizeof(u32);                                             \
+    std::memcpy(entry, tuple + Attribute##_offset, Attribute##_size); \
+    entry += 2 * Attribute##_size;
+ 
+ #define afterBody(Type, Attribute, tuple, entry)                     \
+    const auto Attribute##_offset = offsetof(Type, Attribute);        \
+    const auto Attribute##_size = sizeof(Type::Attribute);            \
+-   entry += (sizeof(u16) * 2);                                       \
++   entry += (sizeof(u32) * 2);                                       \
+    entry += Attribute##_size;                                        \
+    std::memcpy(entry, tuple + Attribute##_offset, Attribute##_size); \
+    entry += 1 * Attribute##_size;
+@@ -90,10 +90,10 @@
+    }
+ 
+ #ifdef DELTA_XOR
+-#define entrySize1(Type, A1) ((2 * sizeof(u16)) + (1 * sizeof(Type::A1)))
++#define entrySize1(Type, A1) ((2 * sizeof(u32)) + (1 * sizeof(Type::A1)))
+ #endif
+ #ifdef DELTA_COPY
+-#define entrySize1(Type, A1) ((2 * sizeof(u16)) + (2 * sizeof(Type::A1)))
++#define entrySize1(Type, A1) ((2 * sizeof(u32)) + (2 * sizeof(Type::A1)))
+ #endif
+ #define entrySize2(Type, A1, A2) entrySize1(Type, A1) + entrySize1(Type, A2)
+ #define entrySize3(Type, A1, A2, A3) entrySize1(Type, A1) + entrySize1(Type, A2) + entrySize1(Type, A3)
+diff --git a/backend/leanstore/storage/buffer-manager/BufferFrame.hpp b/backend/leanstore/storage/buffer-manager/BufferFrame.hpp
+index 40dbc90..09710ad 100644
+--- a/backend/leanstore/storage/buffer-manager/BufferFrame.hpp
++++ b/backend/leanstore/storage/buffer-manager/BufferFrame.hpp
+@@ -13,7 +13,7 @@ namespace leanstore
+ namespace storage
+ {
+ // -------------------------------------------------------------------------------------
+-const u64 PAGE_SIZE = 4 * 1024;
++const u64 PAGE_SIZE = 4 * 1024 * 1;
+ // -------------------------------------------------------------------------------------
+ struct BufferFrame {
+    enum class STATE : u8 { FREE = 0, HOT = 1, COOL = 2, LOADED = 3 };
+diff --git a/backend/leanstore/utils/Misc.hpp b/backend/leanstore/utils/Misc.hpp
+index 76f4da7..e5d5e2d 100644
+--- a/backend/leanstore/utils/Misc.hpp
++++ b/backend/leanstore/utils/Misc.hpp
+@@ -49,7 +49,7 @@ inline u64 fold(u8* writer, const u32& x)
+ // -------------------------------------------------------------------------------------
+ inline u64 fold(u8* writer, const u16& x)
+ {
+-   *reinterpret_cast<u16*>(writer) = __builtin_bswap16(x);
++   *reinterpret_cast<u32*>(writer) = __builtin_bswap16(x);
+    return sizeof(x);
+ }
+ // -------------------------------------------------------------------------------------
+@@ -73,7 +73,7 @@ inline u64 unfold(const u8* input, u32& x)
+ // -------------------------------------------------------------------------------------
+ inline u64 unfold(const u8* input, u16& x)
+ {
+-   x = __builtin_bswap16(*reinterpret_cast<const u16*>(input));
++   x = __builtin_bswap16(*reinterpret_cast<const u32*>(input));
+    return sizeof(x);
+ }
+ // -------------------------------------------------------------------------------------
+diff --git a/frontend/CMakeLists.txt b/frontend/CMakeLists.txt
+index 7ab01ef..a47e44c 100644
+--- a/frontend/CMakeLists.txt
++++ b/frontend/CMakeLists.txt
+@@ -30,32 +30,32 @@ add_executable(min minimalExample/main.cpp)
+ target_link_libraries(min leanstore Threads::Threads)
+ target_include_directories(min PRIVATE ${SHARED_INCLUDE_DIRECTORY})
+ 
+-add_executable(rocksdb_tpcc tpc-c/rocksdb_tpcc.cpp)
+-target_link_libraries(rocksdb_tpcc leanstore rocksdb Threads::Threads dl z libbz2.a lz4 snappy zstd uring)
+-target_include_directories(rocksdb_tpcc PRIVATE ${SHARED_INCLUDE_DIRECTORY})
+-target_compile_definitions(rocksdb_tpcc PUBLIC ROCKSDB_ADAPTER)
+-
+-add_executable(rocksdb_ycsb ycsb/rocksdb_ycsb.cpp)
+-target_link_libraries(rocksdb_ycsb leanstore rocksdb Threads::Threads dl z libbz2.a lz4 snappy zstd uring)
+-target_include_directories(rocksdb_ycsb PRIVATE ${SHARED_INCLUDE_DIRECTORY})
+-target_compile_definitions(rocksdb_ycsb PUBLIC ROCKSDB_ADAPTER)
+-# sudo apt-get install libsnappy-dev  zlib1g-dev libbz2-dev liblz4-dev libzstd-dev librocksdb-dev
+-
+-add_executable(wiredtiger_tpcc tpc-c/wiredtiger_tpcc.cpp)
+-target_link_libraries(wiredtiger_tpcc leanstore wiredtiger Threads::Threads dl z libbz2.a lz4 snappy)
+-target_include_directories(wiredtiger_tpcc PRIVATE ${SHARED_INCLUDE_DIRECTORY})
+-
+-add_executable(wiredtiger_ycsb ycsb/wiredtiger_ycsb.cpp)
+-target_link_libraries(wiredtiger_ycsb leanstore wiredtiger Threads::Threads dl z libbz2.a lz4 snappy)
+-target_include_directories(wiredtiger_ycsb PRIVATE ${SHARED_INCLUDE_DIRECTORY})
+-# prefer https://source.wiredtiger.com/10.0.0/build-posix.html over sudo apt-get install wiredtiger libwiredtiger-dev
+-
+-
+-add_executable(lmdb_tpcc tpc-c/lmdb_tpcc.cpp)
+-target_link_libraries(lmdb_tpcc leanstore lmdb Threads::Threads)
+-target_include_directories(lmdb_tpcc PRIVATE ${SHARED_INCLUDE_DIRECTORY})
+-
+-add_executable(lmdb_ycsb ycsb/lmdb_ycsb.cpp)
+-target_link_libraries(lmdb_ycsb leanstore lmdb Threads::Threads)
+-target_include_directories(lmdb_ycsb PRIVATE ${SHARED_INCLUDE_DIRECTORY})
+-# sudo apt-get install liblmdb-dev
++#add_executable(rocksdb_tpcc tpc-c/rocksdb_tpcc.cpp)
++#target_link_libraries(rocksdb_tpcc leanstore rocksdb Threads::Threads dl z libbz2.a lz4 snappy zstd uring)
++#target_include_directories(rocksdb_tpcc PRIVATE ${SHARED_INCLUDE_DIRECTORY})
++#target_compile_definitions(rocksdb_tpcc PUBLIC ROCKSDB_ADAPTER)
++#
++#add_executable(rocksdb_ycsb ycsb/rocksdb_ycsb.cpp)
++#target_link_libraries(rocksdb_ycsb leanstore rocksdb Threads::Threads dl z libbz2.a lz4 snappy zstd uring)
++#target_include_directories(rocksdb_ycsb PRIVATE ${SHARED_INCLUDE_DIRECTORY})
++#target_compile_definitions(rocksdb_ycsb PUBLIC ROCKSDB_ADAPTER)
++## sudo apt-get install libsnappy-dev  zlib1g-dev libbz2-dev liblz4-dev libzstd-dev librocksdb-dev
++#
++#add_executable(wiredtiger_tpcc tpc-c/wiredtiger_tpcc.cpp)
++#target_link_libraries(wiredtiger_tpcc leanstore wiredtiger Threads::Threads dl z libbz2.a lz4 snappy)
++#target_include_directories(wiredtiger_tpcc PRIVATE ${SHARED_INCLUDE_DIRECTORY})
++#
++#add_executable(wiredtiger_ycsb ycsb/wiredtiger_ycsb.cpp)
++#target_link_libraries(wiredtiger_ycsb leanstore wiredtiger Threads::Threads dl z libbz2.a lz4 snappy)
++#target_include_directories(wiredtiger_ycsb PRIVATE ${SHARED_INCLUDE_DIRECTORY})
++## prefer https://source.wiredtiger.com/10.0.0/build-posix.html over sudo apt-get install wiredtiger libwiredtiger-dev
++#
++#
++#add_executable(lmdb_tpcc tpc-c/lmdb_tpcc.cpp)
++#target_link_libraries(lmdb_tpcc leanstore lmdb Threads::Threads)
++#target_include_directories(lmdb_tpcc PRIVATE ${SHARED_INCLUDE_DIRECTORY})
++#
++#add_executable(lmdb_ycsb ycsb/lmdb_ycsb.cpp)
++#target_link_libraries(lmdb_ycsb leanstore lmdb Threads::Threads)
++#target_include_directories(lmdb_ycsb PRIVATE ${SHARED_INCLUDE_DIRECTORY})
++## sudo apt-get install liblmdb-dev
+diff --git a/frontend/shared/LeanStoreAdapter.hpp b/frontend/shared/LeanStoreAdapter.hpp
+index ee71027..6e53083 100644
+--- a/frontend/shared/LeanStoreAdapter.hpp
++++ b/frontend/shared/LeanStoreAdapter.hpp
+@@ -42,10 +42,10 @@ struct LeanStoreAdapter : Adapter<Record> {
+                  std::function<void()> undo) final
+    {
+       u8 folded_key[Record::maxFoldLength()];
+-      u16 folded_key_len = Record::foldKey(folded_key, key);
++      u32 folded_key_len = Record::foldKey(folded_key, key);
+       OP_RESULT ret = btree->scanDesc(
+           folded_key, folded_key_len,
+-          [&](const u8* key, [[maybe_unused]] u16 key_length, const u8* payload, [[maybe_unused]] u16 payload_length) {
++          [&](const u8* key, [[maybe_unused]] u32 key_length, const u8* payload, [[maybe_unused]] u32 payload_length) {
+              if (key_length != folded_key_len) {
+                 return false;
+              }
+@@ -63,7 +63,7 @@ struct LeanStoreAdapter : Adapter<Record> {
+    void insert(const typename Record::Key& key, const Record& record) final
+    {
+       u8 folded_key[Record::maxFoldLength()];
+-      u16 folded_key_len = Record::foldKey(folded_key, key);
++      u32 folded_key_len = Record::foldKey(folded_key, key);
+       const OP_RESULT res = btree->insert(folded_key, folded_key_len, (u8*)(&record), sizeof(Record));
+       ensure(res == leanstore::OP_RESULT::OK || res == leanstore::OP_RESULT::ABORT_TX);
+       if (res == leanstore::OP_RESULT::ABORT_TX) {
+@@ -74,8 +74,8 @@ struct LeanStoreAdapter : Adapter<Record> {
+    void lookup1(const typename Record::Key& key, const std::function<void(const Record&)>& cb) final
+    {
+       u8 folded_key[Record::maxFoldLength()];
+-      u16 folded_key_len = Record::foldKey(folded_key, key);
+-      const OP_RESULT res = btree->lookup(folded_key, folded_key_len, [&](const u8* payload, u16 payload_length) {
++      u32 folded_key_len = Record::foldKey(folded_key, key);
++      const OP_RESULT res = btree->lookup(folded_key, folded_key_len, [&](const u8* payload, u32 payload_length) {
+          static_cast<void>(payload_length);
+          const Record& typed_payload = *reinterpret_cast<const Record*>(payload);
+          cb(typed_payload);
+@@ -89,7 +89,7 @@ struct LeanStoreAdapter : Adapter<Record> {
+    void update1(const typename Record::Key& key, const std::function<void(Record&)>& cb, UpdateSameSizeInPlaceDescriptor& update_descriptor) final
+    {
+       u8 folded_key[Record::maxFoldLength()];
+-      u16 folded_key_len = Record::foldKey(folded_key, key);
++      u32 folded_key_len = Record::foldKey(folded_key, key);
+       // -------------------------------------------------------------------------------------
+       if (!FLAGS_vi_delta) {
+          // Disable deltas, copy the whole tuple [hacky]
+@@ -102,7 +102,7 @@ struct LeanStoreAdapter : Adapter<Record> {
+       // -------------------------------------------------------------------------------------
+       const OP_RESULT res = btree->updateSameSizeInPlace(
+           folded_key, folded_key_len,
+-          [&](u8* payload, u16 payload_length) {
++          [&](u8* payload, u32 payload_length) {
+              static_cast<void>(payload_length);
+              assert(payload_length == sizeof(Record));
+              Record& typed_payload = *reinterpret_cast<Record*>(payload);
+@@ -118,7 +118,7 @@ struct LeanStoreAdapter : Adapter<Record> {
+    bool erase(const typename Record::Key& key) final
+    {
+       u8 folded_key[Record::maxFoldLength()];
+-      u16 folded_key_len = Record::foldKey(folded_key, key);
++      u32 folded_key_len = Record::foldKey(folded_key, key);
+       const auto res = btree->remove(folded_key, folded_key_len);
+       if (res == leanstore::OP_RESULT::ABORT_TX) {
+          cr::Worker::my().abortTX();
+@@ -131,10 +131,10 @@ struct LeanStoreAdapter : Adapter<Record> {
+              std::function<void()> undo) final
+    {
+       u8 folded_key[Record::maxFoldLength()];
+-      u16 folded_key_len = Record::foldKey(folded_key, key);
++      u32 folded_key_len = Record::foldKey(folded_key, key);
+       OP_RESULT ret = btree->scanAsc(
+           folded_key, folded_key_len,
+-          [&](const u8* key, u16 key_length, const u8* payload, u16 payload_length) {
++          [&](const u8* key, u32 key_length, const u8* payload, u32 payload_length) {
+              if (key_length != folded_key_len) {
+                 return false;
+              }
+@@ -154,9 +154,9 @@ struct LeanStoreAdapter : Adapter<Record> {
+    Field lookupField(const typename Record::Key& key, Field Record::*f)
+    {
+       u8 folded_key[Record::maxFoldLength()];
+-      u16 folded_key_len = Record::foldKey(folded_key, key);
++      u32 folded_key_len = Record::foldKey(folded_key, key);
+       Field local_f;
+-      const OP_RESULT res = btree->lookup(folded_key, folded_key_len, [&](const u8* payload, u16 payload_length) {
++      const OP_RESULT res = btree->lookup(folded_key, folded_key_len, [&](const u8* payload, u32 payload_length) {
+          static_cast<void>(payload_length);
+          Record& typed_payload = *const_cast<Record*>(reinterpret_cast<const Record*>(payload));
+          local_f = (typed_payload).*f;
+diff --git a/frontend/shared/LeanStoreAdapterNC.hpp b/frontend/shared/LeanStoreAdapterNC.hpp
+index 919beff..e3851b0 100644
+--- a/frontend/shared/LeanStoreAdapterNC.hpp
++++ b/frontend/shared/LeanStoreAdapterNC.hpp
+@@ -35,7 +35,7 @@ struct LeanStoreAdapter : Adapter<Record> {
+    void insert(const typename Record::Key& key, const Record& record) final
+    {
+       u8 folded_key[Record::maxFoldLength()];
+-      u16 folded_key_len = Record::foldKey(folded_key, key);
++      u32 folded_key_len = Record::foldKey(folded_key, key);
+       // -------------------------------------------------------------------------------------
+       TID tid = global_tid[Record::id * 8].fetch_add(1);
+       OP_RESULT res;
+@@ -45,7 +45,7 @@ struct LeanStoreAdapter : Adapter<Record> {
+       ensure(res == leanstore::OP_RESULT::OK);
+    }
+    // -------------------------------------------------------------------------------------
+-   void moveIt(TID tid, u8* folded_key, u16 folded_key_len)
++   void moveIt(TID tid, u8* folded_key, u32 folded_key_len)
+    {
+       if (tid & (1ull << 63)) {
+          return;
+@@ -56,14 +56,14 @@ struct LeanStoreAdapter : Adapter<Record> {
+          tmp.count = 0;
+          OP_RESULT ret = key_tid->updateSameSizeInPlace(
+              folded_key, folded_key_len,
+-             [&](u8* payload, u16 payload_length) {
++             [&](u8* payload, u32 payload_length) {
+                 ensure(payload_length == sizeof(TID));
+                 TID old_tid = *reinterpret_cast<TID*>(payload);
+                 TID new_tid = global_tid[Record::id * 8].fetch_add(1) | (1ull << 63);
+                 // -------------------------------------------------------------------------------------
+                 u8 copy[16 * 1024];
+                 u64 copy_length;
+-                OP_RESULT ret2 = tid_value->lookup((u8*)&old_tid, sizeof(TID), [&](const u8* payload, u16 payload_length) {
++                OP_RESULT ret2 = tid_value->lookup((u8*)&old_tid, sizeof(TID), [&](const u8* payload, u32 payload_length) {
+                    ensure(payload_length == sizeof(Record));
+                    copy_length = payload_length;
+                    std::memcpy(copy, payload, copy_length);
+@@ -91,15 +91,15 @@ struct LeanStoreAdapter : Adapter<Record> {
+    void lookup1(const typename Record::Key& key, const std::function<void(const Record&)>& cb) final
+    {
+       u8 folded_key[Record::maxFoldLength()];
+-      u16 folded_key_len = Record::foldKey(folded_key, key);
++      u32 folded_key_len = Record::foldKey(folded_key, key);
+       // -------------------------------------------------------------------------------------
+       OP_RESULT ret;
+       TID tid;
+-      ret = key_tid->lookup(folded_key, folded_key_len, [&](const u8* payload, u16 payload_length) {
++      ret = key_tid->lookup(folded_key, folded_key_len, [&](const u8* payload, u32 payload_length) {
+          ensure(payload_length == sizeof(TID));
+          tid = *reinterpret_cast<const TID*>(payload);
+          // -------------------------------------------------------------------------------------
+-         tid_value->lookup((u8*)&tid, sizeof(TID), [&](const u8* payload, u16 payload_length) {
++         tid_value->lookup((u8*)&tid, sizeof(TID), [&](const u8* payload, u32 payload_length) {
+             ensure(payload_length == sizeof(Record));
+             const Record& typed_payload = *reinterpret_cast<const Record*>(payload);
+             cb(typed_payload);
+@@ -113,7 +113,7 @@ struct LeanStoreAdapter : Adapter<Record> {
+    void update1(const typename Record::Key& key, const std::function<void(Record&)>& cb, UpdateSameSizeInPlaceDescriptor& update_descriptor) final
+    {
+       u8 folded_key[Record::maxFoldLength()];
+-      u16 folded_key_len = Record::foldKey(folded_key, key);
++      u32 folded_key_len = Record::foldKey(folded_key, key);
+       // -------------------------------------------------------------------------------------
+       UpdateSameSizeInPlaceDescriptor tmp;
+       tmp.count = 0;
+@@ -121,12 +121,12 @@ struct LeanStoreAdapter : Adapter<Record> {
+       TID tid;
+       ret = key_tid->updateSameSizeInPlace(
+           folded_key, folded_key_len,
+-          [&](u8* tid_payload, u16 tid_payload_length) {
++          [&](u8* tid_payload, u32 tid_payload_length) {
+              ensure(tid_payload_length == sizeof(TID));
+              tid = *reinterpret_cast<const TID*>(tid_payload);
+              // -------------------------------------------------------------------------------------
+              OP_RESULT ret2 = tid_value->updateSameSizeInPlace((u8*)&tid, sizeof(TID),
+-                                                               [&](u8* payload, u16 payload_length) {
++                                                               [&](u8* payload, u32 payload_length) {
+                                                                   static_cast<void>(payload_length);
+                                                                   assert(payload_length == sizeof(Record));
+                                                                   Record& typed_payload = *reinterpret_cast<Record*>(payload);
+@@ -143,11 +143,11 @@ struct LeanStoreAdapter : Adapter<Record> {
+    bool erase(const typename Record::Key& key) final
+    {
+       u8 folded_key[Record::maxFoldLength()];
+-      u16 folded_key_len = Record::foldKey(folded_key, key);
++      u32 folded_key_len = Record::foldKey(folded_key, key);
+       // -------------------------------------------------------------------------------------
+       OP_RESULT ret;
+       TID tid;
+-      ret = key_tid->lookup(folded_key, folded_key_len, [&](const u8* payload, u16 payload_length) {
++      ret = key_tid->lookup(folded_key, folded_key_len, [&](const u8* payload, u32 payload_length) {
+          ensure(payload_length == sizeof(TID));
+          tid = *reinterpret_cast<const TID*>(payload);
+       });
+@@ -171,17 +171,17 @@ struct LeanStoreAdapter : Adapter<Record> {
+              std::function<void()> undo) final
+    {
+       u8 folded_key[Record::maxFoldLength()];
+-      u16 folded_key_len = Record::foldKey(folded_key, key);
++      u32 folded_key_len = Record::foldKey(folded_key, key);
+       // -------------------------------------------------------------------------------------
+       OP_RESULT ret;
+       ret = key_tid->scanAsc(
+           folded_key, folded_key_len,
+-          [&](const u8* key, [[maybe_unused]] u16 key_length, const u8* tid_ptr, [[maybe_unused]] u16 tid_length) {
++          [&](const u8* key, [[maybe_unused]] u32 key_length, const u8* tid_ptr, [[maybe_unused]] u32 tid_length) {
+              TID tid = *reinterpret_cast<const TID*>(tid_ptr);
+              ensure(tid_length == sizeof(TID));
+              // -------------------------------------------------------------------------------------
+              bool should_continue;
+-             OP_RESULT res2 = tid_value->lookup((u8*)&tid, sizeof(TID), [&](const u8* value_ptr, u16 value_length) {
++             OP_RESULT res2 = tid_value->lookup((u8*)&tid, sizeof(TID), [&](const u8* value_ptr, u32 value_length) {
+                 ensure(value_length == sizeof(Record));
+                 typename Record::Key typed_key;
+                 Record::unfoldKey(key, typed_key);
+@@ -203,17 +203,17 @@ struct LeanStoreAdapter : Adapter<Record> {
+                  std::function<void()> undo) final
+    {
+       u8 folded_key[Record::maxFoldLength()];
+-      u16 folded_key_len = Record::foldKey(folded_key, key);
++      u32 folded_key_len = Record::foldKey(folded_key, key);
+       // -------------------------------------------------------------------------------------
+       OP_RESULT ret;
+       ret = key_tid->scanDesc(
+           folded_key, folded_key_len,
+-          [&](const u8* key, [[maybe_unused]] u16 key_length, const u8* tid_ptr, [[maybe_unused]] u16 tid_length) {
++          [&](const u8* key, [[maybe_unused]] u32 key_length, const u8* tid_ptr, [[maybe_unused]] u32 tid_length) {
+              const TID tid = *reinterpret_cast<const TID*>(tid_ptr);
+              ensure(tid_length == sizeof(TID));
+              // -------------------------------------------------------------------------------------
+              bool should_continue;
+-             OP_RESULT res2 = tid_value->lookup((u8*)&tid, sizeof(TID), [&](const u8* value_ptr, u16 value_length) {
++             OP_RESULT res2 = tid_value->lookup((u8*)&tid, sizeof(TID), [&](const u8* value_ptr, u32 value_length) {
+                 ensure(value_length == sizeof(Record));
+                 typename Record::Key typed_key;
+                 Record::unfoldKey(key, typed_key);
+@@ -234,18 +234,18 @@ struct LeanStoreAdapter : Adapter<Record> {
+    Field lookupField(const typename Record::Key& key, Field Record::*f)
+    {
+       u8 folded_key[Record::maxFoldLength()];
+-      u16 folded_key_len = Record::foldKey(folded_key, key);
++      u32 folded_key_len = Record::foldKey(folded_key, key);
+       // -------------------------------------------------------------------------------------
+       OP_RESULT ret;
+       TID tid;
+-      ret = key_tid->lookup(folded_key, folded_key_len, [&](const u8* payload, u16 payload_length) {
++      ret = key_tid->lookup(folded_key, folded_key_len, [&](const u8* payload, u32 payload_length) {
+          ensure(payload_length == sizeof(TID));
+          tid = *reinterpret_cast<const TID*>(payload);
+       });
+       ensure(ret == OP_RESULT::OK);
+       // -------------------------------------------------------------------------------------
+       Field local_f;
+-      ret = tid_value->lookup((u8*)&tid, sizeof(TID), [&](const u8* payload, u16 payload_length) {
++      ret = tid_value->lookup((u8*)&tid, sizeof(TID), [&](const u8* payload, u32 payload_length) {
+          ensure(payload_length == sizeof(Record));
+          const Record& typed_payload = *reinterpret_cast<const Record*>(payload);
+          local_f = (typed_payload).*f;
+diff --git a/frontend/ycsb/deterministic.cpp b/frontend/ycsb/deterministic.cpp
+index 9ca7e87..ea14e77 100644
+--- a/frontend/ycsb/deterministic.cpp
++++ b/frontend/ycsb/deterministic.cpp
+@@ -1,5 +1,5 @@
+ #include "../shared/LeanStoreAdapter.hpp"
+-#include "Schema.hpp"
++#include "../shared/Schema.hpp"
+ #include "Units.hpp"
+ #include "leanstore/Config.hpp"
+ #include "leanstore/LeanStore.hpp"
+@@ -144,7 +144,7 @@ int main(int argc, char** argv)
+                   if (FLAGS_ycsb_deterministic) {
+                      for (u64 op_i = 0; op_i < FLAGS_ycsb_ops_per_tx; op_i++) {
+                         u8 folded_key[sizeof(YCSBKey)];
+-                        u16 folded_key_len = fold(folded_key, keys[op_i]);
++                        u32 folded_key_len = fold(folded_key, keys[op_i]);
+                         btree_vi->prepareDeterministicUpdate(folded_key, folded_key_len, *d_iterators[op_i]);
+                         ensure(d_iterators[op_i]->leaf.guard.state == leanstore::storage::GUARD_STATE::EXCLUSIVE);
+                      }
+@@ -154,10 +154,10 @@ int main(int argc, char** argv)
+                      // -------------------------------------------------------------------------------------
+                      for (u64 op_i = 0; op_i < FLAGS_ycsb_ops_per_tx; op_i++) {
+                         u8 folded_key[sizeof(YCSBKey)];
+-                        u16 folded_key_len = fold(folded_key, keys[op_i]);
++                        u32 folded_key_len = fold(folded_key, keys[op_i]);
+                         btree_vi->executeDeterministricUpdate(
+                             folded_key, folded_key_len, *d_iterators[op_i],
+-                            [&](u8* payload, u16 payload_length) {
++                            [&](u8* payload, u32 payload_length) {
+                                ensure(payload_length == sizeof(YCSBPayload));
+                                *reinterpret_cast<YCSBPayload*>(payload) = result;
+                             },
